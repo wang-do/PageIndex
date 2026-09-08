@@ -1,0 +1,101 @@
+{
+  "doc_name": "demo_building_code_json",
+  "doc_description": "演示用建筑通用规范，包含适用范围、楼梯、栏杆和无障碍通行要求。",
+  "pages": [
+    {"page_index": 1, "markdown": "第1章 总则\n本规范适用于民用建筑的通用安全与使用要求。"},
+    {"page_index": 2, "markdown": "建筑设计应保障使用安全，并满足相关强制性工程建设规范。"},
+    {"page_index": 3, "markdown": "2.1.1 疏散楼梯的净宽不应小于1.10m。"},
+    {"page_index": 4, "markdown": "2.1.2 楼梯临空侧应设置扶手，扶手高度不应小于0.90m。"},
+    {"page_index": 5, "markdown": "2.2.1 临空处栏杆高度不应小于1.10m。\n2.2.2 栏杆垂直杆件间的净间距不应大于0.11m。"},
+    {"page_index": 6, "markdown": "2.3.1 无障碍通道净宽不应小于1.20m。"},
+    {"page_index": 7, "markdown": "第3章 建筑室外场地\n场地出入口应满足安全通行要求。"},
+    {"page_index": 8, "markdown": "室外步行道与排水设施应满足使用安全要求。"}
+  ],
+  "structure": [
+    {
+      "title": "第 1 章 总则",
+      "start_index": 1,
+      "end_index": 2,
+      "node_id": "0000",
+      "summary": "规定本规范的目的、适用范围和基本原则。"
+    },
+    {
+      "title": "第 2 章 建筑通用空间",
+      "start_index": 3,
+      "end_index": 6,
+      "node_id": "0001",
+      "summary": "规定楼梯、栏杆、坡道等建筑通用空间与部件的安全要求。",
+      "nodes": [
+        {
+          "title": "2.1 楼梯",
+          "start_index": 3,
+          "end_index": 4,
+          "node_id": "0002",
+          "summary": "规定楼梯踏步、净宽和扶手的基本安全要求。",
+          "nodes": [
+            {
+              "title": "2.1.1 楼梯净宽",
+              "start_index": 3,
+              "end_index": 3,
+              "node_id": "0003",
+              "summary": "疏散楼梯的净宽不应小于 1.10m。"
+            },
+            {
+              "title": "2.1.2 楼梯扶手",
+              "start_index": 4,
+              "end_index": 4,
+              "node_id": "0004",
+              "summary": "楼梯临空侧应设置扶手，扶手高度不应小于 0.90m。"
+            }
+          ]
+        },
+        {
+          "title": "2.2 栏杆与栏板",
+          "start_index": 5,
+          "end_index": 5,
+          "node_id": "0005",
+          "summary": "规定栏杆高度、构造和防坠落要求。",
+          "nodes": [
+            {
+              "title": "2.2.1 栏杆高度",
+              "start_index": 5,
+              "end_index": 5,
+              "node_id": "0006",
+              "summary": "临空处栏杆高度不应小于 1.10m。"
+            },
+            {
+              "title": "2.2.2 栏杆净间距",
+              "start_index": 5,
+              "end_index": 5,
+              "node_id": "0007",
+              "summary": "栏杆垂直杆件间的净间距不应大于 0.11m。"
+            }
+          ]
+        },
+        {
+          "title": "2.3 无障碍通行",
+          "start_index": 6,
+          "end_index": 6,
+          "node_id": "0008",
+          "summary": "规定无障碍通道、坡道和门洞的通行要求。",
+          "nodes": [
+            {
+              "title": "2.3.1 无障碍通道宽度",
+              "start_index": 6,
+              "end_index": 6,
+              "node_id": "0009",
+              "summary": "无障碍通道净宽不应小于 1.20m。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "第 3 章 建筑室外场地",
+      "start_index": 7,
+      "end_index": 8,
+      "node_id": "0010",
+      "summary": "规定场地出入口、步行道与室外排水的基本要求。"
+    }
+  ]
+}
