@@ -1,6 +1,6 @@
 {
   "doc_name": "GB55037-2022 建筑防火通用规范（演示）",
-  "doc_description": "演示数据：建筑防火、安全疏散与消防救援要求，非标准全文。",
+  "doc_description": "规定建筑防火、安全疏散与消防救援要求。",
   "metadata": {"standard_no": "GB55037-2022", "domain": "建筑防火", "is_demo": true},
   "pages": [
     {"page_index": 1, "markdown": "第1章 总则\n本演示规范适用于建筑防火设计、施工和使用管理。"},

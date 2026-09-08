@@ -1,6 +1,6 @@
 {
   "doc_name": "GB55031-2022 民用建筑通用规范（演示）",
-  "doc_description": "演示数据：民用建筑空间、场地、通用空间和部件构造要求，非标准全文。",
+  "doc_description": "规定民用建筑空间、场地、通用空间和部件构造要求。",
   "metadata": {"standard_no": "GB55031-2022", "domain": "民用建筑", "is_demo": true},
   "pages": [
     {"page_index": 1, "markdown": "第1章 总则\n本演示规范适用于民用建筑的通用安全与使用要求。"},
