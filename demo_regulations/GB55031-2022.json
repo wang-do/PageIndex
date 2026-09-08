@@ -1,0 +1,33 @@
+{
+  "doc_name": "GB55031-2022 民用建筑通用规范（演示）",
+  "doc_description": "演示数据：民用建筑空间、场地、通用空间和部件构造要求，非标准全文。",
+  "metadata": {"standard_no": "GB55031-2022", "domain": "民用建筑", "is_demo": true},
+  "pages": [
+    {"page_index": 1, "markdown": "第1章 总则\n本演示规范适用于民用建筑的通用安全与使用要求。"},
+    {"page_index": 2, "markdown": "第2章 基本规定\n民用建筑应满足安全、卫生、节能和无障碍使用要求。"},
+    {"page_index": 3, "markdown": "第3章 建筑面积与高度\n建筑面积和高度应满足安全使用要求。"},
+    {"page_index": 4, "markdown": "第4章 建筑室外场地\n场地出入口和步行道应保障安全通行。"},
+    {"page_index": 5, "markdown": "第5章 建筑通用空间\n5.1.1 疏散楼梯净宽不应小于1.10m。\n5.2.1 无障碍通道净宽不应小于1.20m。"},
+    {"page_index": 6, "markdown": "第6章 建筑部件与构造\n6.3.1 临空处栏杆高度不应小于1.10m。\n6.3.2 栏杆垂直杆件间的净间距不应大于0.11m。"},
+    {"page_index": 7, "markdown": "6.4 门窗\n外窗和门的构造应满足安全使用要求。"},
+    {"page_index": 8, "markdown": "6.5 防水与防潮\n建筑相关部位应采取防水、防潮措施。"}
+  ],
+  "structure": [
+    {"title": "第1章 总则", "node_id": "0000", "start_index": 1, "end_index": 1, "summary": "适用范围和通用目标。"},
+    {"title": "第2章 基本规定", "node_id": "0001", "start_index": 2, "end_index": 2, "summary": "安全、卫生、节能和无障碍基本要求。"},
+    {"title": "第3章 建筑面积与高度", "node_id": "0002", "start_index": 3, "end_index": 3, "summary": "建筑面积和高度的安全使用要求。"},
+    {"title": "第4章 建筑室外场地", "node_id": "0003", "start_index": 4, "end_index": 4, "summary": "场地出入口和步行道的安全通行要求。"},
+    {"title": "第5章 建筑通用空间", "node_id": "0004", "start_index": 5, "end_index": 5, "summary": "楼梯和无障碍通道等通用空间要求。", "nodes": [
+      {"title": "5.1 楼梯", "node_id": "0005", "start_index": 5, "end_index": 5, "summary": "疏散楼梯净宽不应小于1.10m。"},
+      {"title": "5.2 无障碍通行", "node_id": "0006", "start_index": 5, "end_index": 5, "summary": "无障碍通道净宽不应小于1.20m。"}
+    ]},
+    {"title": "第6章 建筑部件与构造", "node_id": "0007", "start_index": 6, "end_index": 8, "summary": "栏杆、门窗以及防水防潮等部件构造要求。", "nodes": [
+      {"title": "6.3 栏杆与栏板", "node_id": "0008", "start_index": 6, "end_index": 6, "summary": "临空处栏杆高度和垂直杆件净间距要求。", "nodes": [
+        {"title": "6.3.1 栏杆高度", "node_id": "0009", "start_index": 6, "end_index": 6, "summary": "临空处栏杆高度不应小于1.10m。"},
+        {"title": "6.3.2 栏杆净间距", "node_id": "0010", "start_index": 6, "end_index": 6, "summary": "栏杆垂直杆件间净间距不应大于0.11m。"}
+      ]},
+      {"title": "6.4 门窗", "node_id": "0011", "start_index": 7, "end_index": 7, "summary": "门窗构造应满足安全使用要求。"},
+      {"title": "6.5 防水与防潮", "node_id": "0012", "start_index": 8, "end_index": 8, "summary": "相关部位应采取防水、防潮措施。"}
+    ]}
+  ]
+}

@@ -3,25 +3,68 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from pageindex import PageIndexLocalClient
 
 
-def import_structure_json(json_path: Path, storage_path: Path) -> str:
-    """导入结构树和页面原文，返回可供 client.chat 使用的 doc_id。"""
-    client = PageIndexLocalClient(
+PROJECT_DIR = Path(__file__).resolve().parent
+
+## 可以把需要读的法规全部放在这
+DEFAULT_JSON_PATHS = [
+    PROJECT_DIR / "demo_regulations" / "GB55031-2022.json",
+    PROJECT_DIR / "demo_regulations" / "GB55037-2022.json",
+]
+
+
+def create_client(storage_path: Path) -> PageIndexLocalClient:
+    """创建用于导入法规 JSON 的本地 PageIndex 客户端。"""
+    return PageIndexLocalClient(
         index_model="deepseek/deepseek-chat",
-        chat_model="deepseek/deepseek-chat",
+        chat_model="deepseek-chat",
         storage_path=str(storage_path),
     )
-    result = client.submit_structure_json(str(json_path))
-    return result["doc_id"]
+
+
+def get_document_name(json_path: Path) -> str:
+    """读取 JSON 的文档标识，用于避免重复导入。"""
+    with json_path.open("r", encoding="utf-8") as file:
+        document_name = json.load(file).get("doc_name")
+    if not isinstance(document_name, str) or not document_name.strip():
+        raise ValueError(f"JSON 缺少非空 doc_name：{json_path}")
+    return document_name
+
+
+def import_structure_json(json_paths: list[Path], storage_path: Path) -> list[dict]:
+    """导入多份法规 JSON；同名文档已存在时跳过。"""
+    client = create_client(storage_path)
+    existing_names = {
+        document["name"] for document in client.list_documents()["documents"]
+    }
+    results: list[dict] = []
+    for json_path in json_paths:
+        if not json_path.exists():
+            raise FileNotFoundError(f"JSON 文件不存在：{json_path}")
+        document_name = get_document_name(json_path)
+        if document_name in existing_names:
+            results.append({"name": document_name, "status": "skipped"})
+            continue
+        result = client.submit_structure_json(str(json_path))
+        results.append({"name": result["name"], "doc_id": result["doc_id"], "status": "imported"})
+        existing_names.add(result["name"])
+    return results
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="导入 PageIndex 结构 JSON")
-    parser.add_argument("json_path", type=Path, help="包含 structure 和 pages 的 JSON 文件", default="C:\\Users\\localuser\\Desktop\\王栋焱\\法律RAG\\PageIndex-main\\demo_building_code_pageindex.json")
+    parser.add_argument(
+        "json_paths",
+        nargs="*",
+        type=Path,
+        default=DEFAULT_JSON_PATHS,
+        help="一份或多份包含 structure 和 pages 的 JSON；不传时导入两份演示法规",
+    )
     parser.add_argument(
         "--storage-path",
         type=Path,
@@ -30,9 +73,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    doc_id = import_structure_json(args.json_path, args.storage_path)
-    print(f"导入完成，doc_id={doc_id}")
-    print("可用 ask_question.py 对该 doc_id 提问。")
+    results = import_structure_json(args.json_paths, args.storage_path)
+    for result in results:
+        if result["status"] == "imported":
+            print(f"导入完成：{result['name']}，doc_id={result['doc_id']}")
+        else:
+            print(f"跳过已导入文档：{result['name']}",)
 
 
 if __name__ == "__main__":
