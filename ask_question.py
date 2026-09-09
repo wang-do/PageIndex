@@ -7,26 +7,37 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from conversation_history import ConversationHistory
 from pageindex import PageIndexLocalClient
-from retrieval_cache import CachedDocument, RetrievalCache
+from retrieval_cache import CachedDocument, RetrievalCache, is_complete_question
 
 
 DEFAULT_QUESTION = "宿舍、旅馆选址有什么规定？GB55025-2022"
-
+# DEFAULT_QUESTION = "详细说一下第一条"
 
 def ask_question(
-    doc_ids: Optional[list[str]], question: str, storage_path: Path
+    doc_ids: Optional[list[str]],
+    question: str,
+    storage_path: Path,
+    session_id: str = "default",
+    history_turns: int = 3,
 ) -> str:
-    """优先复用条文页缓存；未命中时调用 PageIndex 原生检索。"""
+    """带最近对话上下文提问，并优先复用单轮精确缓存。"""
     client = PageIndexLocalClient(
         index_model="deepseek/deepseek-chat",
         chat_model="deepseek-chat",
         storage_path=str(storage_path),
     )
     cache = RetrievalCache(storage_path / "retrieval_cache.db")
+    history = ConversationHistory(storage_path / "conversation_history.db")
+    messages = history.get_recent(session_id, history_turns)
+    messages.append({"role": "user", "content": question})
 
-    # 命中缓存时跳过目录树检索，只读取已定位的条文页。
-    cached_documents = cache.get(question) if doc_ids is None else []
+    complete_question = is_complete_question(question)
+    # 只有能独立理解的问题才查全局缓存，避免追问脱离上下文误命中。
+    cached_documents = (
+        cache.get(question) if doc_ids is None and complete_question else []
+    )
     if cached_documents:
         documents = {
             document["name"]: document["id"]
@@ -45,10 +56,12 @@ def ask_question(
             
             clause_text = "\n\n".join(page["markdown"] for page in pages)
             markdown_parts.append(f"法规：{cached_document.doc_name}\n{clause_text}")
-        return "\n\n".join(markdown_parts)
+        answer = "\n\n".join(markdown_parts)
+        history.append_turn(session_id, question, answer)
+        return answer
 
-    # 未命中缓存时，调用 PageIndex 完整执行文档树和条文页检索。
-    response = client.responses(question, doc_id=doc_ids, max_turns=7)
+    # PageIndex 原生支持 role/content 消息列表，并按完整上下文检索。
+    response = client.responses(messages, doc_id=doc_ids, max_turns=7)
 
     # 输出本轮模型实际调用过的检索工具，便于查看检索路径。
     print("检索路径：")
@@ -56,12 +69,13 @@ def ask_question(
         if item.get("type") == "function_call":
             print(f"- {item['name']}({item['arguments']})")
 
-    # 全库检索结果才写入缓存，避免限定法规范围污染同问题的缓存。
-    if doc_ids is None:
+    # 只有完整问题的全库检索结果才写入全局缓存。
+    if doc_ids is None and complete_question:
         cache_retrieval_paths(cache, question, response)
 
     final_message = response["output"][-1]
     answer = final_message["content"][0]["text"]
+    history.append_turn(session_id, question, answer)
     return answer
 
 
@@ -104,9 +118,17 @@ def main() -> None:
     parser.add_argument("question",nargs="?", default=DEFAULT_QUESTION, help=f"要询问的问题")
     parser.add_argument("--doc-ids", nargs="+", default=None, help="限定一部或多部法规的 doc_id；不传时检索整个本地法规库")
     parser.add_argument("--storage-path", type=Path, default=Path(".pageindex"), help="索引缓存目录，默认：.pageindex")
+    parser.add_argument("--session-id", default="default", help="对话会话 ID，默认：default")
+    parser.add_argument("--history-turns", type=int, default=3, help="携带的最近对话轮数，默认：3")
     args = parser.parse_args()
 
-    answer = ask_question(args.doc_ids, args.question, args.storage_path)
+    answer = ask_question(
+        args.doc_ids,
+        args.question,
+        args.storage_path,
+        args.session_id,
+        args.history_turns,
+    )
     print(answer)
 
 

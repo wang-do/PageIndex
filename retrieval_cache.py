@@ -10,6 +10,26 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+# 出现这些词时，问题通常依赖前文，不能作为全局缓存键。
+FOLLOW_UP_MARKERS = (
+    "这个", "那个", "这种", "这样", "上述", "前述", "该要求", "该规定",
+    "该条", "该项", "它", "呢",
+)
+
+# 这些短问句没有明确对象，只有结合上一轮才能理解。
+SHORT_FOLLOW_UP_PREFIXES = (
+    "那", "那么", "可以", "能否", "是否", "还要", "还需要", "具体",
+)
+
+# 法规问题中常见的独立查询意图和对象词。
+QUESTION_INTENT_MARKERS = (
+    "要求", "规定", "标准", "条件", "范围", "情形", "责任", "期限", "处罚",
+    "尺寸", "净宽", "净高", "高度", "宽度", "间距", "面积", "数量", "定义",
+    "适用", "应当", "不得", "是否需要", "是多少", "有哪些", "是什么",
+    "能否", "是否", "可以",
+)
+
+
 @dataclass(frozen=True)
 class CachedDocument:
     """缓存中已定位的一部法规及其条文页范围。"""
@@ -23,6 +43,24 @@ def normalize_question(question: str) -> str:
     normalized = unicodedata.normalize("NFKC", question).strip()
     normalized = " ".join(normalized.split())
     return normalized.rstrip("。！？?!")
+
+
+def is_complete_question(question: str) -> bool:
+    """用规则判断问题能否脱离对话独立理解。"""
+    normalized = normalize_question(question)
+    compact = normalized.replace(" ", "")
+    if not compact:
+        return False
+
+    # 强指代或省略表达必须结合上一轮，禁止写入全局缓存。
+    if any(marker in compact for marker in FOLLOW_UP_MARKERS):
+        return False
+    if len(compact) <= 8 and compact.startswith(SHORT_FOLLOW_UP_PREFIXES):
+        return False
+
+    # 至少包含查询意图，并有足够文本表达被查询的对象。
+    has_intent = any(marker in compact for marker in QUESTION_INTENT_MARKERS)
+    return has_intent and len(compact) >= 7
 
 
 class RetrievalCache:
