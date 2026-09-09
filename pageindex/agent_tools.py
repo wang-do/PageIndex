@@ -139,10 +139,10 @@ TOOL_CONTRACT: dict[str, dict[str, Any]] = {
                     "type": "number",
                     "minimum": 1,
                     "maximum": 50,
-                    "default": 10,
+                    "default": 50,
                     "description": (
                         "Number of documents to return per page (1-50, "
-                        "default 10)"
+                        "default 50)"
                     ),
                 },
             },
@@ -717,7 +717,7 @@ def _split_oversized_node(node: Any, budget: int) -> list[Any]:
 
 def _browse_documents(client, folder_id: str = "root", recursive: bool = False,
                       sort: str = "time", query: Optional[str] = None,
-                      offset: int = 0, limit: int = 10,
+                      offset: int = 0, limit: int = 50,
                       _allowed_ids: Optional[frozenset] = None) -> tuple[dict, bool]:
     if folder_id != "root":
         return _folder_unsupported("folder_id")

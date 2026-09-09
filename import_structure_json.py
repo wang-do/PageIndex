@@ -12,9 +12,8 @@ from pageindex import PageIndexLocalClient
 PROJECT_DIR = Path(__file__).resolve().parent
 
 ## 可以把需要读的法规全部放在这
-DEFAULT_JSON_PATHS = [
-    PROJECT_DIR / "demo_regulations" / "GB55025-2022.json",
-]
+DEFAULT_JSON_PATHS = "C:\\Users\\localuser\\Desktop\\王栋焱\\法律RAG\\json后处理\\pageindex_json"
+
 
 
 def create_client(storage_path: Path) -> PageIndexLocalClient:
@@ -35,16 +34,22 @@ def get_document_name(json_path: Path) -> str:
     return document_name
 
 
-def import_structure_json(json_paths: list[Path], storage_path: Path) -> list[dict]:
+def import_structure_json(json_paths: Path, storage_path: Path) -> list[dict]:
     """导入多份法规 JSON；同名文档已存在时跳过。"""
+
+    if json_paths == "":
+        raise NotADirectoryError(f"JSON 目录不存在：{json_paths}")
+
     client = create_client(storage_path)
     existing_names = {
         document["name"] for document in client.list_documents()["documents"]
     }
     results: list[dict] = []
-    for json_path in json_paths:
-        if not json_path.exists():
-            raise FileNotFoundError(f"JSON 文件不存在：{json_path}")
+
+    json_list = list(Path(json_paths).glob('*.json'))
+
+    for json_path in json_list:
+  
         document_name = get_document_name(json_path)
         if document_name in existing_names:
             results.append({"name": document_name, "status": "skipped"})

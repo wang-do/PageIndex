@@ -44,8 +44,8 @@
             "type": "number",
             "minimum": 1,
             "maximum": 50,
-            "default": 10,
-            "description": "Number of documents to return per page (1-50, default 10)"
+            "default": 50,
+            "description": "Number of documents to return per page (1-50, default 50)"
           }
         },
         "required": []
