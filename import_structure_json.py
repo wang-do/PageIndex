@@ -13,8 +13,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 
 ## 可以把需要读的法规全部放在这
 DEFAULT_JSON_PATHS = [
-    PROJECT_DIR / "demo_regulations" / "GB55031-2022.json",
-    PROJECT_DIR / "demo_regulations" / "GB55037-2022.json",
+    PROJECT_DIR / "demo_regulations" / "GB55025-2022.json",
 ]
 
 
