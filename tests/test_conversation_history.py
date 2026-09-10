@@ -14,6 +14,38 @@ def test_get_recent_returns_complete_turns_in_order(tmp_path):
     ]
 
 
+def test_session_uses_first_question_as_title_and_keeps_messages(tmp_path):
+    history = ConversationHistory(tmp_path / "conversation_history.db")
+    history.create_session("legal-chat")
+
+    assert history.set_initial_title("legal-chat", "住宅卧室的净高要求是什么？") == (
+        "住宅卧室的净高要求是什么？"
+    )
+    history.append_turn("legal-chat", "住宅卧室的净高要求是什么？", "不应低于规定值")
+
+    assert history.list_sessions() == [{
+        "session_id": "legal-chat",
+        "title": "住宅卧室的净高要求是什么？",
+    }]
+    assert history.get_messages("legal-chat") == [
+        {"role": "user", "content": "住宅卧室的净高要求是什么？"},
+        {"role": "assistant", "content": "不应低于规定值"},
+    ]
+
+
+def test_session_can_be_renamed(tmp_path):
+    history = ConversationHistory(tmp_path / "conversation_history.db")
+    history.create_session("legal-chat")
+
+    assert history.rename_session("legal-chat", "住宅净高")
+    assert history.list_sessions()[0]["title"] == "住宅净高"
+
+    history.append_turn("legal-chat", "追问", "回答")
+    assert history.delete_session("legal-chat")
+    assert history.list_sessions() == []
+    assert history.get_messages("legal-chat") == []
+
+
 def test_ask_question_passes_recent_messages_to_pageindex(tmp_path, monkeypatch):
     calls = []
 

@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>法规问答</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; height: 100vh; overflow: hidden; background: #fff; color: #202123; }
+    button { border: 0; border-radius: 6px; cursor: pointer; font: inherit; }
+    .app { height: 100vh; overflow: hidden; }
+    .sidebar { position: fixed; inset: 0 auto 0 0; width: 252px; padding: 18px 12px; overflow-y: auto; background: #f7f7f8; border-right: 1px solid #e8e8e8; }
+    .brand { display: flex; align-items: center; gap: 8px; padding: 5px 10px 24px; font-size: 17px; font-weight: 650; }
+    .brand-mark { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; background: #202123; color: #fff; font-size: 12px; }
+    #new-session { width: 100%; padding: 10px 12px; text-align: left; background: #fff; border: 1px solid #dedede; color: #343541; box-shadow: 0 1px 2px #00000008; }
+    #new-session:hover { background: #f0f0f0; }
+    .section-label { margin: 25px 10px 8px; color: #8a8a8a; font-size: 12px; }
+    #session-list { display: flex; flex-direction: column; gap: 2px; }
+    .session-row { display: flex; align-items: center; border-radius: 6px; }
+    .session-row.active { background: #e9e9ea; }
+    .session-open { min-width: 0; flex: 1; overflow: hidden; padding: 9px 8px 9px 10px; background: transparent; color: #555; text-align: left; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .session-row.active .session-open { color: #222; }
+    .main { height: 100vh; min-width: 0; margin-left: 252px; display: flex; flex-direction: column; }
+    header { height: 60px; padding: 0 24px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; }
+    h1 { margin: 0; font-size: 15px; font-weight: 600; }
+    .conversation { width: min(820px, 100%); flex: 1; margin: 0 auto; padding: 32px 24px 150px; overflow-y: auto; }
+    #messages { display: flex; flex-direction: column; gap: 26px; }
+    .empty { min-height: 52vh; display: grid; place-items: center; color: #8e8e8e; font-size: 14px; }
+    .message { max-width: 86%; white-space: pre-wrap; line-height: 1.65; font-size: 15px; }
+    .user { align-self: flex-end; padding: 11px 15px; border-radius: 18px; background: #f1f1f1; }
+    .assistant { align-self: flex-start; color: #202123; }
+    .error { align-self: flex-start; color: #a22d2d; }
+    .waiting { display: flex; align-items: center; gap: 9px; color: #777; font-size: 13px; }
+    .spinner { width: 14px; height: 14px; border: 2px solid #ddd; border-top-color: #555; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .composer-wrap { position: fixed; right: 0; bottom: 0; left: 252px; padding: 20px 24px 24px; background: linear-gradient(#fff0, #fff 30%); }
+    form { width: min(820px, 100%); margin: 0 auto; display: flex; align-items: flex-end; gap: 10px; padding: 10px 10px 10px 16px; border: 1px solid #d9d9d9; border-radius: 14px; background: #fff; box-shadow: 0 4px 22px #0000000d; }
+    textarea { min-height: 28px; max-height: 180px; flex: 1; resize: vertical; padding: 5px 0; border: 0; outline: none; font: inherit; line-height: 1.45; }
+    textarea::placeholder { color: #999; }
+    #send { width: 32px; height: 32px; padding: 0; border-radius: 50%; background: #202123; color: #fff; font-size: 16px; line-height: 1; }
+    #send:disabled, textarea:disabled { opacity: .5; cursor: not-allowed; }
+    .hint { width: min(820px, 100%); margin: 8px auto 0; color: #999; text-align: center; font-size: 11px; }
+    .context-menu { position: fixed; z-index: 10; width: 156px; padding: 5px; border: 1px solid #dedede; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px #00000024; }
+    .context-menu[hidden], .dialog-backdrop[hidden] { display: none; }
+    .menu-item { display: flex; width: 100%; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 5px; background: transparent; color: #333; text-align: left; font-size: 13px; }
+    .menu-item:hover { background: #f1f1f1; }
+    .menu-item.danger { color: #bc3030; }
+    .menu-icon { width: 16px; text-align: center; }
+    .dialog-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: #00000033; }
+    .dialog { width: min(430px, 100%); padding: 24px; border-radius: 14px; background: #fff; box-shadow: 0 16px 50px #0000002e; }
+    .dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .dialog-title { margin: 0; font-size: 20px; font-weight: 650; }
+    .dialog-close { width: 30px; height: 30px; padding: 0; background: transparent; color: #666; font-size: 20px; line-height: 1; }
+    .dialog-copy { margin: 6px 0 16px; color: #8b8b8b; font-size: 14px; }
+    #rename-input { width: 100%; padding: 9px 10px; border: 1px solid #4a90e2; border-radius: 6px; outline: 0; font: inherit; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+    .dialog-actions button { padding: 8px 15px; background: #f3f3f3; color: #333; }
+    .dialog-actions #dialog-confirm { background: #202123; color: #fff; }
+    .dialog-actions #dialog-confirm.danger { background: #bb2f2f; }
+    @media (max-width: 700px) { .sidebar { width: 62px; padding: 18px 8px; } .brand { justify-content: center; padding: 5px 0 24px; } .brand span, .section-label, #session-list, #new-session { display: none; } .main { margin-left: 62px; } .composer-wrap { left: 62px; padding: 14px 12px 18px; } header { padding: 0 16px; } .conversation { padding: 24px 16px 130px; } .message { max-width: 94%; } .hint { display: none; } }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark">法</div><span>法规问答</span></div>
+      <button id="new-session" type="button">＋&nbsp; 新建会话</button>
+      <div class="section-label">会话</div>
+      <div id="session-list"></div>
+    </aside>
+    <section class="main">
+      <header><h1 id="conversation-title">法规问答</h1></header>
+      <div class="conversation"><section id="messages" aria-live="polite"><div class="empty">输入问题开始对话</div></section></div>
+      <div class="composer-wrap">
+        <form id="chat-form">
+          <textarea id="question" placeholder="发送消息" aria-label="问题"></textarea>
+          <button id="send" type="submit" aria-label="发送">↑</button>
+        </form>
+        <div class="hint">Enter 发送，Shift + Enter 换行</div>
+      </div>
+    </section>
+  </main>
+  <div id="session-menu" class="context-menu" hidden>
+    <button id="menu-rename" class="menu-item" type="button"><span class="menu-icon">✎</span>重命名</button>
+    <button id="menu-delete" class="menu-item danger" type="button"><span class="menu-icon">×</span>删除</button>
+  </div>
+  <div id="dialog-backdrop" class="dialog-backdrop" hidden>
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <div class="dialog-header">
+        <h2 id="dialog-title" class="dialog-title">重命名会话</h2>
+        <button id="dialog-close" class="dialog-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <p id="dialog-copy" class="dialog-copy">保持简短且易于识别</p>
+      <input id="rename-input" maxlength="30" aria-label="会话名称">
+      <div class="dialog-actions">
+        <button id="dialog-cancel" type="button">取消</button>
+        <button id="dialog-confirm" type="button">保存</button>
+      </div>
+    </section>
+  </div>
+  <script>
+    let sessionId = null;
+    const messages = document.querySelector('#messages');
+    const question = document.querySelector('#question');
+    const send = document.querySelector('#send');
+    const sessionList = document.querySelector('#session-list');
+    const conversationTitle = document.querySelector('#conversation-title');
+    const sessionMenu = document.querySelector('#session-menu');
+    const dialogBackdrop = document.querySelector('#dialog-backdrop');
+    const dialogTitle = document.querySelector('#dialog-title');
+    const dialogCopy = document.querySelector('#dialog-copy');
+    const renameInput = document.querySelector('#rename-input');
+    const dialogConfirm = document.querySelector('#dialog-confirm');
+    let selectedSession = null;
+    let dialogAction = null;
+
+    function addMessage(role, text) {
+      const empty = messages.querySelector('.empty');
+      if (empty) empty.remove();
+      const node = document.createElement('div');
+      node.className = `message ${role}`;
+      node.textContent = text;
+      messages.appendChild(node);
+      node.scrollIntoView({ block: 'end' });
+      return node;
+    }
+
+    function resetMessages() {
+      messages.replaceChildren();
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = '输入问题开始对话';
+      messages.appendChild(empty);
+    }
+
+    function renderSessions(sessions) {
+      sessionList.replaceChildren();
+      for (const session of sessions) {
+        const row = document.createElement('div');
+        row.className = `session-row${session.session_id === sessionId ? ' active' : ''}`;
+
+        const openButton = document.createElement('button');
+        openButton.className = 'session-open';
+        openButton.textContent = session.title;
+        openButton.title = session.title;
+        openButton.addEventListener('click', () => selectSession(session.session_id, session.title));
+
+        row.append(openButton);
+        row.addEventListener('contextmenu', (event) => {
+          event.preventDefault();
+          showSessionMenu(event, session);
+        });
+        sessionList.appendChild(row);
+      }
+    }
+
+    async function loadSessions() {
+      const response = await fetch('/api/sessions');
+      const sessions = await readResponse(response);
+      if (!response.ok) throw new Error(sessions.detail || '读取会话失败');
+      renderSessions(sessions);
+      return sessions;
+    }
+
+    async function createSession() {
+      const response = await fetch('/api/sessions', { method: 'POST' });
+      const data = await readResponse(response);
+      if (!response.ok) throw new Error(data.detail || '新建会话失败');
+      sessionId = data.session_id;
+      conversationTitle.textContent = data.title;
+      resetMessages();
+      await loadSessions();
+    }
+
+    async function selectSession(id, title) {
+      sessionId = id;
+      conversationTitle.textContent = title;
+      const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/messages`);
+      const history = await readResponse(response);
+      if (!response.ok) throw new Error(history.detail || '读取对话失败');
+      messages.replaceChildren();
+      for (const message of history) addMessage(message.role, message.content);
+      if (history.length === 0) resetMessages();
+      await loadSessions();
+    }
+
+    function showSessionMenu(event, session) {
+      selectedSession = session;
+      const menuWidth = 156;
+      const menuHeight = 82;
+      const left = Math.min(event.clientX, window.innerWidth - menuWidth - 8);
+      const top = Math.min(event.clientY, window.innerHeight - menuHeight - 8);
+      sessionMenu.style.left = `${Math.max(8, left)}px`;
+      sessionMenu.style.top = `${Math.max(8, top)}px`;
+      sessionMenu.hidden = false;
+    }
+
+    function hideSessionMenu() {
+      sessionMenu.hidden = true;
+    }
+
+    function showDialog(action, session) {
+      selectedSession = session;
+      dialogAction = action;
+      const isRename = action === 'rename';
+      dialogTitle.textContent = isRename ? '重命名会话' : '删除会话';
+      dialogCopy.textContent = isRename ? '保持简短且易于识别' : `确定删除“${session.title}”及其全部对话吗？`;
+      renameInput.hidden = !isRename;
+      dialogConfirm.textContent = isRename ? '保存' : '删除';
+      dialogConfirm.classList.toggle('danger', !isRename);
+      if (isRename) renameInput.value = session.title;
+      dialogBackdrop.hidden = false;
+      if (isRename) {
+        renameInput.focus();
+        renameInput.select();
+      } else {
+        dialogConfirm.focus();
+      }
+    }
+
+    function hideDialog() {
+      dialogBackdrop.hidden = true;
+      dialogAction = null;
+    }
+
+    async function renameSession(session, title) {
+      const response = await fetch(`/api/sessions/${encodeURIComponent(session.session_id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title })
+      });
+      const data = await readResponse(response);
+      if (!response.ok) throw new Error(data.detail || '修改名称失败');
+      if (session.session_id === sessionId) conversationTitle.textContent = data.title;
+      await loadSessions();
+    }
+
+    async function deleteSession(session) {
+      if (send.disabled) return;
+      const response = await fetch(`/api/sessions/${encodeURIComponent(session.session_id)}`, {
+        method: 'DELETE'
+      });
+      const data = await readResponse(response);
+      if (!response.ok) throw new Error(data.detail || '删除会话失败');
+
+      const sessions = await loadSessions();
+      if (session.session_id !== sessionId) return;
+      if (sessions.length > 0) {
+        await selectSession(sessions[0].session_id, sessions[0].title);
+      } else {
+        await createSession();
+      }
+    }
+
+    document.querySelector('#menu-rename').addEventListener('click', () => {
+      hideSessionMenu();
+      showDialog('rename', selectedSession);
+    });
+
+    document.querySelector('#menu-delete').addEventListener('click', () => {
+      hideSessionMenu();
+      showDialog('delete', selectedSession);
+    });
+
+    document.querySelector('#dialog-close').addEventListener('click', hideDialog);
+    document.querySelector('#dialog-cancel').addEventListener('click', hideDialog);
+    dialogBackdrop.addEventListener('click', (event) => {
+      if (event.target === dialogBackdrop) hideDialog();
+    });
+
+    dialogConfirm.addEventListener('click', async () => {
+      const session = selectedSession;
+      if (!session || !dialogAction) return;
+      try {
+        if (dialogAction === 'rename') {
+          const title = renameInput.value.trim();
+          if (!title) return;
+          await renameSession(session, title);
+        } else {
+          await deleteSession(session);
+        }
+        hideDialog();
+      } catch (error) {
+        dialogCopy.textContent = String(error.message);
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      if (!sessionMenu.hidden && !sessionMenu.contains(event.target)) hideSessionMenu();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        hideSessionMenu();
+        hideDialog();
+      }
+      if (event.key === 'Enter' && !dialogBackdrop.hidden && dialogAction === 'rename') {
+        dialogConfirm.click();
+      }
+    });
+
+    function addWaitingMessage() {
+      const empty = messages.querySelector('.empty');
+      if (empty) empty.remove();
+      const node = document.createElement('div');
+      node.className = 'message waiting';
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      const label = document.createElement('span');
+      label.textContent = '正在检索 · 0 秒';
+      node.append(spinner, label);
+      messages.appendChild(node);
+      node.scrollIntoView({ block: 'end' });
+
+      const startedAt = Date.now();
+      const timer = window.setInterval(() => {
+        label.textContent = `正在检索 · ${Math.floor((Date.now() - startedAt) / 1000)} 秒`;
+      }, 1000);
+      return { node, timer };
+    }
+
+    document.querySelector('#new-session').addEventListener('click', async () => {
+      try {
+        await createSession();
+        question.focus();
+      } catch (error) {
+        addMessage('error', error.message);
+      }
+    });
+
+    document.querySelector('#chat-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const text = question.value.trim();
+      if (!text || send.disabled) return;
+      if (!sessionId) await createSession();
+      const requestSessionId = sessionId;
+      if (conversationTitle.textContent === '新会话') {
+        conversationTitle.textContent = text.slice(0, 30);
+        const activeTitle = sessionList.querySelector('.session-row.active .session-open');
+        if (activeTitle) activeTitle.textContent = conversationTitle.textContent;
+      }
+      addMessage('user', text);
+      const waiting = addWaitingMessage();
+      question.value = '';
+      send.disabled = true;
+      question.disabled = true;
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: requestSessionId, question: text })
+        });
+        const data = await readResponse(response);
+        if (!response.ok) throw new Error(data.detail || '请求失败');
+        window.clearInterval(waiting.timer);
+        waiting.node.remove();
+        if (requestSessionId === sessionId) {
+          conversationTitle.textContent = data.title;
+          addMessage('assistant', data.answer);
+        }
+        await loadSessions();
+      } catch (error) {
+        window.clearInterval(waiting.timer);
+        waiting.node.remove();
+        if (requestSessionId === sessionId) addMessage('error', String(error.message));
+      } finally {
+        send.disabled = false;
+        question.disabled = false;
+        question.focus();
+      }
+    });
+
+    question.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        document.querySelector('#chat-form').requestSubmit();
+      }
+    });
+
+    async function initialize() {
+      const sessions = await loadSessions();
+      if (sessions.length === 0) {
+        await createSession();
+      } else {
+        await selectSession(sessions[0].session_id, sessions[0].title);
+      }
+      question.focus();
+    }
+
+    initialize().catch((error) => addMessage('error', error.message));
+
+    async function readResponse(response) {
+      const text = await response.text();
+      try {
+        return text ? JSON.parse(text) : {};
+      } catch {
+        return { detail: text || `请求失败（${response.status}）` };
+      }
+    }
+  </script>
+</body>
+</html>
