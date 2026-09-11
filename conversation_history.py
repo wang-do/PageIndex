@@ -42,7 +42,7 @@ class ConversationHistory:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT role, content
+                SELECT role, content, cached, tokens, elapsed
                 FROM conversation_messages
                 WHERE session_id = ?
                 ORDER BY id
@@ -129,8 +129,16 @@ class ConversationHistory:
             )
         return cursor.rowcount > 0
 
-    def append_turn(self, session_id: str, question: str, answer: str) -> None:
-        """保存一轮用户问题和 AI 回答。"""
+    def append_turn(
+        self,
+        session_id: str,
+        question: str,
+        answer: str,
+        cached: bool | None = None,
+        tokens: int | None = None,
+        elapsed: float | None = None,
+    ) -> None:
+        """保存一轮用户问题和 AI 回答（assistant 行附带缓存/token/耗时统计）。"""
         with self._connect() as connection:
             connection.execute(
                 """
@@ -149,12 +157,12 @@ class ConversationHistory:
             )
             connection.executemany(
                 """
-                INSERT INTO conversation_messages(session_id, role, content)
-                VALUES (?, ?, ?)
+                INSERT INTO conversation_messages(session_id, role, content, cached, tokens, elapsed)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    (session_id, "user", question),
-                    (session_id, "assistant", answer),
+                    (session_id, "user", question, None, None, None),
+                    (session_id, "assistant", answer, cached, tokens, elapsed),
                 ],
             )
 
@@ -176,7 +184,10 @@ class ConversationHistory:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-                    content TEXT NOT NULL
+                    content TEXT NOT NULL,
+                    cached INTEGER,
+                    tokens INTEGER,
+                    elapsed REAL
                 )
                 """
             )

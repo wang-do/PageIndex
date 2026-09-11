@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from time import perf_counter
 from typing import Optional
 
 from conversation_history import ConversationHistory
@@ -20,9 +21,10 @@ def ask_question(
     question: str,
     storage_path: Path,
     session_id: str = "default",
-    history_turns: int = 3,
-) -> str:
+    history_turns: int = 5,
+) -> dict:
     """带最近对话上下文提问，并优先复用单轮精确缓存。"""
+    started_at = perf_counter()
     client = PageIndexLocalClient(
         index_model="deepseek/deepseek-chat",
         chat_model="deepseek-chat",
@@ -53,15 +55,22 @@ def ask_question(
             pages = client.get_page_content(
                 documents[cached_document.doc_name], cached_document.pages
             )
-            
+
             clause_text = "\n\n".join(page["markdown"] for page in pages)
             markdown_parts.append(f"法规：{cached_document.doc_name}\n{clause_text}")
         answer = "\n\n".join(markdown_parts)
-        history.append_turn(session_id, question, answer)
-        return answer
+        elapsed = round(perf_counter() - started_at, 1)
+        history.append_turn(session_id, question, answer, cached=True, tokens=None, elapsed=elapsed)
+        return {"answer": answer, "cached": True, "tokens": None}
 
     # PageIndex 原生支持 role/content 消息列表，并按完整上下文检索。
-    response = client.responses(messages, doc_id=doc_ids, max_turns=7)
+    response = client.responses(
+        messages,
+        doc_id=doc_ids,
+        max_turns=7,
+        # 追加到系统提示末尾：默认提示词全英文，模型会跟着说英文。
+        instructions="Always answer in Simplified Chinese (简体中文).",
+    )
 
     # 输出本轮模型实际调用过的检索工具，便于查看检索路径。
     print("检索路径：")
@@ -75,8 +84,14 @@ def ask_question(
 
     final_message = response["output"][-1]
     answer = final_message["content"][0]["text"]
-    history.append_turn(session_id, question, answer)
-    return answer
+
+    # 三个输出量 是否命中缓存 token使用量 使用时长
+    elapsed = round(perf_counter() - started_at, 1)
+    usage = response.get("usage") or {}
+    tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+
+    history.append_turn(session_id, question, answer, cached=False, tokens=tokens or None, elapsed=elapsed)
+    return {"answer": answer, "cached": False, "tokens": tokens or None}
 
 
 def cache_retrieval_paths(
@@ -122,14 +137,14 @@ def main() -> None:
     parser.add_argument("--history-turns", type=int, default=3, help="携带的最近对话轮数，默认：3")
     args = parser.parse_args()
 
-    answer = ask_question(
+    result = ask_question(
         args.doc_ids,
         args.question,
         args.storage_path,
         args.session_id,
         args.history_turns,
     )
-    print(answer)
+    print(result["answer"])
 
 
 if __name__ == "__main__":

@@ -28,6 +28,18 @@
     #messages { display: flex; flex-direction: column; gap: 26px; }
     .empty { min-height: 52vh; display: grid; place-items: center; color: #8e8e8e; font-size: 14px; }
     .message { max-width: 86%; white-space: pre-wrap; line-height: 1.65; font-size: 15px; }
+    .assistant { white-space: normal; }
+    .assistant p { margin: 0 0 10px; }
+    .assistant p:last-child { margin-bottom: 0; }
+    .assistant ul, .assistant ol { margin: 0 0 10px; padding-left: 22px; }
+    .assistant h1, .assistant h2, .assistant h3 { margin: 14px 0 8px; font-size: 15px; }
+    .assistant table { border-collapse: collapse; margin: 0 0 10px; }
+    .assistant th, .assistant td { border: 1px solid #e0e0e0; padding: 5px 10px; }
+    .assistant code { padding: 1px 5px; border-radius: 4px; background: #f3f3f3; font-size: 13px; }
+    .assistant pre { margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: #f6f6f6; overflow-x: auto; }
+    .assistant pre code { padding: 0; background: transparent; }
+    .assistant blockquote { margin: 0 0 10px; padding: 2px 12px; border-left: 3px solid #e0e0e0; color: #666; }
+    .meta { margin-top: 8px; font-size: 14px; color: #b8b8b8; }
     .user { align-self: flex-end; padding: 11px 15px; border-radius: 18px; background: #f1f1f1; }
     .assistant { align-self: flex-start; color: #202123; }
     .error { align-self: flex-start; color: #a22d2d; }
@@ -99,6 +111,7 @@
       </div>
     </section>
   </div>
+  <script src="marked.min.js"></script>
   <script>
     let sessionId = null;
     const messages = document.querySelector('#messages');
@@ -115,12 +128,25 @@
     let selectedSession = null;
     let dialogAction = null;
 
-    function addMessage(role, text) {
+    function addMessage(role, text, meta) {
       const empty = messages.querySelector('.empty');
       if (empty) empty.remove();
       const node = document.createElement('div');
       node.className = `message ${role}`;
-      node.textContent = text;
+      if (role === 'assistant' && window.marked) {
+        node.innerHTML = marked.parse(text, { breaks: true });
+      } else {
+        node.textContent = text;
+      }
+      if (meta) {
+        const parts = [meta.cached ? '命中缓存' : '未命中缓存'];
+        if (meta.tokens != null) parts.push(`token：${meta.tokens}`);
+        parts.push(`${meta.elapsed}s`);
+        const line = document.createElement('div');
+        line.className = 'meta';
+        line.textContent = parts.join('  ·  ');
+        node.appendChild(line);
+      }
       messages.appendChild(node);
       node.scrollIntoView({ block: 'end' });
       return node;
@@ -173,6 +199,14 @@
       await loadSessions();
     }
 
+    function enterNewSession() {
+      // 只做界面跳转，不创建会话；发出第一个问题后才真正创建并录入左侧。
+      sessionId = null;
+      conversationTitle.textContent = '新会话';
+      resetMessages();
+      return loadSessions();
+    }
+
     async function selectSession(id, title) {
       sessionId = id;
       conversationTitle.textContent = title;
@@ -180,7 +214,12 @@
       const history = await readResponse(response);
       if (!response.ok) throw new Error(history.detail || '读取对话失败');
       messages.replaceChildren();
-      for (const message of history) addMessage(message.role, message.content);
+      for (const message of history) {
+        const meta = message.role === 'assistant' && message.elapsed != null
+          ? { cached: !!message.cached, tokens: message.tokens, elapsed: message.elapsed }
+          : undefined;
+        addMessage(message.role, message.content, meta);
+      }
       if (history.length === 0) resetMessages();
       await loadSessions();
     }
@@ -249,7 +288,7 @@
       if (sessions.length > 0) {
         await selectSession(sessions[0].session_id, sessions[0].title);
       } else {
-        await createSession();
+        await enterNewSession();
       }
     }
 
@@ -322,7 +361,7 @@
 
     document.querySelector('#new-session').addEventListener('click', async () => {
       try {
-        await createSession();
+        await enterNewSession();
         question.focus();
       } catch (error) {
         addMessage('error', error.message);
@@ -357,7 +396,7 @@
         waiting.node.remove();
         if (requestSessionId === sessionId) {
           conversationTitle.textContent = data.title;
-          addMessage('assistant', data.answer);
+          addMessage('assistant', data.answer, data);
         }
         await loadSessions();
       } catch (error) {
@@ -381,7 +420,7 @@
     async function initialize() {
       const sessions = await loadSessions();
       if (sessions.length === 0) {
-        await createSession();
+        await enterNewSession();
       } else {
         await selectSession(sessions[0].session_id, sessions[0].title);
       }

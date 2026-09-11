@@ -1,6 +1,7 @@
 """法规问答的最小 FastAPI 服务。"""
 
 from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
 import uvicorn
@@ -38,6 +39,12 @@ def index() -> FileResponse:
     return FileResponse(FRONTEND_FILE)
 
 
+@app.get("/marked.min.js")
+def marked_js() -> FileResponse:
+    """返回前端 markdown 渲染库。"""
+    return FileResponse(FRONTEND_FILE.parent / "marked.min.js")
+
+
 @app.post("/api/sessions")
 def create_session() -> dict[str, str]:
     """创建一个互不共享历史的新会话。"""
@@ -53,7 +60,7 @@ def list_sessions() -> list[dict[str, str]]:
 
 
 @app.get("/api/sessions/{session_id}/messages")
-def get_messages(session_id: str) -> list[dict[str, str]]:
+def get_messages(session_id: str) -> list[dict]:
     """返回指定会话的历史消息。"""
     return history.get_messages(session_id)
 
@@ -78,15 +85,16 @@ def delete_session(session_id: str) -> dict[str, bool]:
 
 
 @app.post("/api/chat")
-def chat(request: ChatRequest) -> dict[str, str]:
+def chat(request: ChatRequest) -> dict:
     """在指定会话中继续提问。"""
     question = request.question.strip()
     session_id = request.session_id.strip()
     if not question or not session_id:
         raise HTTPException(status_code=422, detail="问题和会话不能为空")
     title = history.set_initial_title(session_id, question)
+    started_at = perf_counter()
     try:
-        answer = ask_question(
+        result = ask_question(
             None,
             question,
             STORAGE_PATH,
@@ -95,7 +103,14 @@ def chat(request: ChatRequest) -> dict[str, str]:
     except Exception as exc:
         # 模型网络/API 失败时也返回 JSON，避免前端误报 JSON 解析错误。
         raise HTTPException(status_code=502, detail=f"后端未启动，模型服务调用失败：{exc}") from exc
-    return {"answer": answer, "title": title}
+    elapsed = round(perf_counter() - started_at, 1)
+    return {
+        "answer": result["answer"],
+        "title": title,
+        "cached": result["cached"],
+        "tokens": result["tokens"],
+        "elapsed": elapsed,
+    }
 
 
 if __name__ == "__main__":
