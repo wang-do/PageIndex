@@ -1,12 +1,13 @@
 """法规问答的最小 FastAPI 服务。"""
 
+import json
 from pathlib import Path
-from time import perf_counter
+from typing import Iterator
 from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ask_question import ask_question
@@ -85,32 +86,31 @@ def delete_session(session_id: str) -> dict[str, bool]:
 
 
 @app.post("/api/chat")
-def chat(request: ChatRequest) -> dict:
-    """在指定会话中继续提问。"""
+def chat(request: ChatRequest) -> StreamingResponse:
+    """在指定会话中继续提问，SSE 逐步推送检索过程与答案。"""
     question = request.question.strip()
     session_id = request.session_id.strip()
     if not question or not session_id:
         raise HTTPException(status_code=422, detail="问题和会话不能为空")
     title = history.set_initial_title(session_id, question)
-    started_at = perf_counter()
-    try:
-        result = ask_question(
-            None,
-            question,
-            STORAGE_PATH,
-            session_id=session_id,
-        )
-    except Exception as exc:
-        # 模型网络/API 失败时也返回 JSON，避免前端误报 JSON 解析错误。
-        raise HTTPException(status_code=502, detail=f"后端未启动，模型服务调用失败：{exc}") from exc
-    elapsed = round(perf_counter() - started_at, 1)
-    return {
-        "answer": result["answer"],
-        "title": title,
-        "cached": result["cached"],
-        "tokens": result["tokens"],
-        "elapsed": elapsed,
-    }
+
+    def sse() -> Iterator[str]:
+        try:
+            for event in ask_question(None, question, STORAGE_PATH,
+                                      session_id=session_id):
+                if event.get("type") == "done":
+                    event["title"] = title
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            # 生成器任何未捕获异常也转成 error 事件，避免流中断后前端无提示。
+            detail = f"模型服务调用失败：{exc}"
+            yield f"data: {json.dumps({'type': 'error', 'detail': detail}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        sse(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":

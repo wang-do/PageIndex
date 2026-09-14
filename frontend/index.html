@@ -40,6 +40,9 @@
     .assistant pre code { padding: 0; background: transparent; }
     .assistant blockquote { margin: 0 0 10px; padding: 2px 12px; border-left: 3px solid #e0e0e0; color: #666; }
     .meta { margin-top: 8px; font-size: 14px; color: #b8b8b8; }
+    .steps { margin: 0 0 10px; padding: 6px 10px 6px 12px; border-left: 3px solid #e5e5e5; background: #fafafa; border-radius: 6px; font-size: 12px; color: #8a8a8a; }
+    .steps summary { cursor: pointer; }
+    .steps li { margin: 3px 0 3px 6px; }
     .user { align-self: flex-end; padding: 11px 15px; border-radius: 18px; background: #f1f1f1; }
     .assistant { align-self: flex-start; color: #202123; }
     .error { align-self: flex-start; color: #a22d2d; }
@@ -128,13 +131,22 @@
     let selectedSession = null;
     let dialogAction = null;
 
+    // marked 对 null/undefined 会抛错，统一在此兜底并记录来源便于定位。
+    function renderMarkdown(text) {
+      if (text == null) {
+        console.warn('[renderMarkdown] 收到空文本', new Error().stack);
+        text = '';
+      }
+      return marked.parse(String(text), { breaks: true });
+    }
+
     function addMessage(role, text, meta) {
       const empty = messages.querySelector('.empty');
       if (empty) empty.remove();
       const node = document.createElement('div');
       node.className = `message ${role}`;
       if (role === 'assistant' && window.marked) {
-        node.innerHTML = marked.parse(text, { breaks: true });
+        node.innerHTML = renderMarkdown(text);
       } else {
         node.textContent = text;
       }
@@ -347,14 +359,14 @@
       const spinner = document.createElement('span');
       spinner.className = 'spinner';
       const label = document.createElement('span');
-      label.textContent = '正在检索 · 0 秒';
+      label.textContent = '已运行 0 秒';
       node.append(spinner, label);
       messages.appendChild(node);
       node.scrollIntoView({ block: 'end' });
 
       const startedAt = Date.now();
       const timer = window.setInterval(() => {
-        label.textContent = `正在检索 · ${Math.floor((Date.now() - startedAt) / 1000)} 秒`;
+        label.textContent = `已运行 ${Math.floor((Date.now() - startedAt) / 1000)} 秒`;
       }, 1000);
       return { node, timer };
     }
@@ -384,26 +396,89 @@
       question.value = '';
       send.disabled = true;
       question.disabled = true;
+      const appendAnswerMeta = (node, meta) => {
+        const parts = [meta.cached ? '命中缓存' : '未命中缓存'];
+        if (meta.tokens != null) parts.push(`token：${meta.tokens}`);
+        parts.push(`${meta.elapsed}s`);
+        const line = document.createElement('div');
+        line.className = 'meta';
+        line.textContent = parts.join('  ·  ');
+        node.appendChild(line);
+      };
       try {
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: requestSessionId, question: text })
         });
-        const data = await readResponse(response);
-        if (!response.ok) throw new Error(data.detail || '请求失败');
-        window.clearInterval(waiting.timer);
-        waiting.node.remove();
-        if (requestSessionId === sessionId) {
-          conversationTitle.textContent = data.title;
-          addMessage('assistant', data.answer, data);
+        if (!response.ok || !response.body) {
+          const data = await readResponse(response);
+          throw new Error(data.detail || '请求失败');
         }
+        if (requestSessionId !== sessionId) return;
+
+        // 流式回答节点：上方"检索过程"折叠区 + 答案正文 + 底部统计行
+        const node = document.createElement('div');
+        node.className = 'message assistant';
+        const steps = document.createElement('details');
+        steps.className = 'steps';
+        steps.open = true;
+        steps.innerHTML = '<summary>检索过程</summary><ol></ol>';
+        const stepList = steps.querySelector('ol');
+        const body = document.createElement('div');
+        node.append(steps, body);
+        messages.appendChild(node);
+        node.scrollIntoView({ block: 'end' });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let answerText = '';
+        let finalMeta = null;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const frames = buffer.split('\n\n');
+          buffer = frames.pop();
+          for (const frame of frames) {
+            const line = frame.trim();
+            if (!line.startsWith('data:')) continue;
+            let event;
+            try { event = JSON.parse(line.slice(5).trim()); } catch { continue; }
+            if (event.type === 'step') {
+              const li = document.createElement('li');
+              li.textContent = event.text;
+              stepList.appendChild(li);
+              node.scrollIntoView({ block: 'end' });
+            } else if (event.type === 'delta') {
+              answerText += event.text ?? '';
+              body.innerHTML = renderMarkdown(answerText);
+              node.scrollIntoView({ block: 'end' });
+            } else if (event.type === 'done') {
+              answerText = event.answer;
+              body.innerHTML = renderMarkdown(answerText);
+              finalMeta = event;
+            } else if (event.type === 'error') {
+              throw new Error(friendlyError(event.detail));
+            }
+          }
+        }
+        if (finalMeta) {
+          appendAnswerMeta(node, finalMeta);
+          conversationTitle.textContent = finalMeta.title;
+          const activeTitle = sessionList.querySelector('.session-row.active .session-open');
+          if (activeTitle) activeTitle.textContent = finalMeta.title;
+        }
+        steps.open = false;
+        node.scrollIntoView({ block: 'end' });
         await loadSessions();
       } catch (error) {
+        if (requestSessionId === sessionId) addMessage('error', friendlyError(String(error.message)));
+      } finally {
+        // 计时圈圈贯穿整个请求生命周期，任何结束路径（完成/出错/切会话）都消失。
         window.clearInterval(waiting.timer);
         waiting.node.remove();
-        if (requestSessionId === sessionId) addMessage('error', String(error.message));
-      } finally {
         send.disabled = false;
         question.disabled = false;
         question.focus();
@@ -428,6 +503,17 @@
     }
 
     initialize().catch((error) => addMessage('error', error.message));
+
+    // 把后端报错翻译成用户能看懂的话（匹配不到就原样显示）。
+    // 只认 "Insufficient Balance/余额不足" 文字特征（高度特异，不会误判）；
+    // 402 状态码数字太弱（截断的无关报错可能带它），不作为判据。
+    function friendlyError(detail) {
+      const text = String(detail || '');
+      if (/insufficient balance|余额不足/i.test(text)) {
+        return 'token余额不足，请前往 DeepSeek 平台充值后重试';
+      }
+      return text;
+    }
 
     async function readResponse(response) {
       const text = await response.text();

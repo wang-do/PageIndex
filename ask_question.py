@@ -1,4 +1,12 @@
-"""使用已有的 PageIndex 索引提问。"""
+"""使用已有的 PageIndex 索引提问（SSE 事件流版本）。
+
+ask_question() 是生成器，逐步产出事件 dict：
+  {"type": "step",  "text": "查阅《GB50016》3.6.4 页"}   检索过程
+  {"type": "delta", "text": "..."}                        答案文本增量
+  {"type": "done",  "answer": ..., "cached": ..., "tokens": ..., "elapsed": ...}
+  {"type": "error", "detail": "..."}
+导航结束时照旧写入检索缓存与会话历史（含 cached/tokens/elapsed 统计）。
+"""
 
 from __future__ import annotations
 
@@ -16,14 +24,35 @@ from retrieval_cache import CachedDocument, RetrievalCache, is_complete_question
 DEFAULT_QUESTION = "宿舍、旅馆选址有什么规定？GB55025-2022"
 # DEFAULT_QUESTION = "详细说一下第一条"
 
+_INSTRUCTION_ZH = "Always answer in Simplified Chinese (简体中文)."
+
+
+def _describe_tool(item: dict) -> str:
+    """把一次工具调用翻译成一句人话，用于前端检索过程展示。"""
+    name = item.get("name") or ""
+    try:
+        args = json.loads(item.get("arguments") or "{}")
+    except (TypeError, ValueError):
+        args = {}
+    doc = args.get("doc_name") or ""
+    pages = args.get("pages") or ""
+    if name == "browse_documents":
+        return "浏览法规库"
+    if name == "get_document_structure":
+        return f"查看《{doc}》目录" if doc else "查看文档目录"
+    if name == "get_page_content":
+        return f"查阅第 《{doc}》{pages} 条法规" if pages else f"查阅《{doc}》"
+    return name or "调用工具"
+
+
 def ask_question(
     doc_ids: Optional[list[str]],
     question: str,
     storage_path: Path,
     session_id: str = "default",
     history_turns: int = 5,
-) -> dict:
-    """带最近对话上下文提问，并优先复用单轮精确缓存。"""
+):
+    """带最近对话上下文提问，逐步产出事件；结束时写缓存与历史。"""
     started_at = perf_counter()
     client = PageIndexLocalClient(
         index_model="deepseek/deepseek-chat",
@@ -49,8 +78,9 @@ def ask_question(
         }
     else:
         documents = {}
+
     if cached_documents and all(document.doc_name in documents for document in cached_documents):
-        print("-----------------触发缓存-------------------------")
+        yield {"type": "step", "text": "命中缓存，直接读取条文"}
         markdown_parts: list[str] = []
         for cached_document in cached_documents:
             # 每部法规的一组条文页通过一次 PageIndex 调用读回。
@@ -63,37 +93,64 @@ def ask_question(
         answer = "\n\n".join(markdown_parts)
         elapsed = round(perf_counter() - started_at, 1)
         history.append_turn(session_id, question, answer, cached=True, tokens=None, elapsed=elapsed)
-        return {"answer": answer, "cached": True, "tokens": None}
+        yield {"type": "delta", "text": answer}
+        yield {"type": "done", "answer": answer, "cached": True, "tokens": None, "elapsed": elapsed}
+        return
 
-    # PageIndex 原生支持 role/content 消息列表，并按完整上下文检索。
-    response = client.responses(
-        messages,
-        doc_id=doc_ids,
-        max_turns=7,
-        # 追加到系统提示末尾：默认提示词全英文，模型会跟着说英文。
-        instructions="Always answer in Simplified Chinese (简体中文).",
-    )
+    # 未命中：流式 agentic 导航，把工具调用与答案增量实时抛给调用方。
+    try:
+        events = client.responses(
+            messages,
+            doc_id=doc_ids,
+            max_turns=7,
+            # 追加到系统提示末尾：默认提示词全英文，模型会跟着说英文。
+            instructions=_INSTRUCTION_ZH,
+            stream=True,
+        )
+        final: Optional[dict] = None
+        for event in events:
+            etype = event.get("type")
+            if etype == "response.output_item.done":
+                item = event.get("item") or {}
+                if item.get("type") == "function_call":
+                    yield {"type": "step", "text": _describe_tool(item)}
+            elif etype == "response.output_text.delta":
+                delta = event.get("delta") or ""
+                if delta:
+                    yield {"type": "delta", "text": delta}
+            elif etype in ("response.completed", "response.incomplete",
+                           "response.failed"):
+                final = event.get("response") or {}
+        if final is None:
+            raise RuntimeError("模型未返回结果")
+    except Exception as exc:
+        yield {"type": "error", "detail": str(exc)}
+        return
 
-    # 输出本轮模型实际调用过的检索工具，便于查看检索路径。
-    print("检索路径：")
-    for item in response["items"]:
-        if item.get("type") == "function_call":
-            print(f"- {item['name']}({item['arguments']})")
+    # 流结束：从最终 envelope 取权威数据写缓存与历史。
+    output = final.get("output") or []
+    items = final.get("items") or []
+    # 三个输出量 是否命中缓存 token使用量 使用时长
+    usage = final.get("usage") or {}
+    tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+    elapsed = round(perf_counter() - started_at, 1)
+
+    answer = ""
+    if output:
+        last = output[-1]
+        answer = "".join(
+            part.get("text", "") for part in (last.get("content") or [])
+            if isinstance(part, dict)
+        )
+    history.append_turn(session_id, question, answer,
+                        cached=False, tokens=tokens or None, elapsed=elapsed)
 
     # 只有完整问题的全库检索结果才写入全局缓存。
     if doc_ids is None and complete_question:
-        cache_retrieval_paths(cache, question, response)
+        cache_retrieval_paths(cache, question, {"items": items})
 
-    final_message = response["output"][-1]
-    answer = final_message["content"][0]["text"]
-
-    # 三个输出量 是否命中缓存 token使用量 使用时长
-    elapsed = round(perf_counter() - started_at, 1)
-    usage = response.get("usage") or {}
-    tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
-
-    history.append_turn(session_id, question, answer, cached=False, tokens=tokens or None, elapsed=elapsed)
-    return {"answer": answer, "cached": False, "tokens": tokens or None}
+    yield {"type": "done", "answer": answer, "cached": False,
+           "tokens": tokens or None, "elapsed": elapsed}
 
 
 def cache_retrieval_paths(
@@ -139,14 +196,21 @@ def main() -> None:
     parser.add_argument("--history-turns", type=int, default=3, help="携带的最近对话轮数，默认：3")
     args = parser.parse_args()
 
-    result = ask_question(
+    for event in ask_question(
         args.doc_ids,
         args.question,
         args.storage_path,
         args.session_id,
         args.history_turns,
-    )
-    print(result["answer"])
+    ):
+        if event["type"] == "step":
+            print(f"[检索] {event['text']}")
+        elif event["type"] == "delta":
+            print(event["text"], end="", flush=True)
+        elif event["type"] == "done":
+            print()
+        elif event["type"] == "error":
+            print(f"[错误] {event['detail']}")
 
 
 if __name__ == "__main__":
