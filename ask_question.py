@@ -37,9 +37,11 @@ def ask_question(
 
     complete_question = is_complete_question(question)
     # 只有能独立理解的问题才查全局缓存，避免追问脱离上下文误命中。
-    cached_documents = (
-        cache.get(question) if doc_ids is None and complete_question else []
-    )
+    # 两级精确键：① 全文键（一模一样的问题）② jieba 关键词串键（句式变体）。
+    if doc_ids is None and complete_question:
+        cached_documents = cache.get(question) or cache.get_by_keyword(question)
+    else:
+        cached_documents = []
     if cached_documents:
         documents = {
             document["name"]: document["id"]
