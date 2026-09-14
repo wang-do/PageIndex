@@ -39,7 +39,9 @@ def main() -> None:
                     terms.add(title)
     terms.update(INTENT_WORDS)
 
-    lines = sorted(f"{term} 10 n" for term in terms)
+    # 词频给 1000：低于它时自定义词会被高频单字组合的切分路径压掉
+    # （如"总则"被切成"总/则"）。
+    lines = sorted(f"{term} 1000 n" for term in terms)
     OUTPUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"已生成 {OUTPUT_PATH.name}：{len(lines)} 个词条")
 

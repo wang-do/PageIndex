@@ -19,6 +19,13 @@ KEYWORD_CACHE_ENABLED = True
 USERDICT_PATH = Path(__file__).parent / "userdict.txt"
 _KEEP_FLAG_PREFIX = "nvab"  # 保留名词/动词/形容词/区别词，虚词、代词、数词丢弃。
 
+# 纯疑问形式词，不参与键区分（"X有哪些"和"X"是同一意图），否则一个问法
+# 带一个不带就会错开键。userdict 里保留它们只为让 jieba 整词切出、在此整体剔除。
+_DROP_WORDS = {
+    "有哪些", "哪些", "什么", "是多少", "是什么", "多少",
+    "啥", "怎么", "怎样", "如何", "请问", "一下",
+}
+
 
 # 这个是是否缓存读入的文本
 # 出现这些词时，问题通常依赖前文，不能作为全局缓存键。
@@ -101,6 +108,7 @@ def keyword_key(question: str) -> str | None:
     words = [
         word for word, flag in jieba.posseg.cut(normalized)
         if flag[0] in _KEEP_FLAG_PREFIX and len(word) >= 2
+        and word not in _DROP_WORDS
     ]
     if len(words) < 2:
         return None
