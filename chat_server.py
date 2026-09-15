@@ -1,6 +1,7 @@
 """法规问答的最小 FastAPI 服务。"""
 
 import json
+import threading
 from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
@@ -10,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ask_question import ask_question
+from ask_question import _INSTRUCTION_ZH, ask_question
 from conversation_history import ConversationHistory
 
 
@@ -19,6 +20,33 @@ STORAGE_PATH = Path(".pageindex")
 history = ConversationHistory(STORAGE_PATH / "conversation_history.db")
 
 app = FastAPI()
+
+
+@app.on_event("startup")
+def warmup() -> None:
+    """启动时后台预热，把冷启动成本（jieba/SDK/连接/prompt 缓存）
+    从用户第一次提问挪到服务启动阶段。预热失败不影响服务。"""
+
+    def _warm() -> None:
+        try:
+            import retrieval_cache as rc
+            from pageindex import PageIndexLocalClient
+
+            rc._ensure_jieba()
+            client = PageIndexLocalClient(
+                index_model="deepseek/deepseek-chat",
+                chat_model="deepseek-chat",
+                storage_path=str(STORAGE_PATH),
+            )
+            client.list_documents()
+            # 一次最小模型请求：热 HTTPS 连接 + agents SDK 初始化 +
+            # 建立系统提示前缀的 prompt 缓存。
+            client.responses("ping", max_turns=1, instructions=_INSTRUCTION_ZH)
+            print("[预热] 完成")
+        except Exception as exc:
+            print(f"[预热] 失败（不影响服务）：{exc}")
+
+    threading.Thread(target=_warm, daemon=True).start()
 
 
 class ChatRequest(BaseModel):

@@ -19,6 +19,9 @@ KEYWORD_CACHE_ENABLED = True
 USERDICT_PATH = Path(__file__).parent / "userdict.txt"
 _KEEP_FLAG_PREFIX = "nvab"  # 保留名词/动词/形容词/区别词，虚词、代词、数词丢弃。
 
+# 缓存键数上限（LRU）：超过即按最久未使用整键淘汰；命中会自动续命。
+MAX_KEY_ENTRIES = 50
+
 # 纯疑问形式词，不参与键区分（"X有哪些"和"X"是同一意图），否则一个问法
 # 带一个不带就会错开键。userdict 里保留它们只为让 jieba 整词切出、在此整体剔除。
 _DROP_WORDS = {
@@ -149,6 +152,24 @@ class RetrievalCache:
                 """,
                 (key,),
             ).fetchall()
+            if rows:
+                # LRU 续命：删除后按原顺序重插，rowid 自然变为最新。
+                # 不能用 UPDATE rowid = 标量子查询——一个键多行时会算出
+                # 同一个目标 rowid，第二行起必撞 UNIQUE 约束。
+                connection.execute(
+                    "DELETE FROM retrieval_cache WHERE question = ?",
+                    (key,),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO retrieval_cache(question, doc_name, pages)
+                    VALUES (?, ?, ?)
+                    """,
+                    [
+                        (key, row["doc_name"], row["pages"])
+                        for row in rows
+                    ],
+                )
         return [
             CachedDocument(doc_name=row["doc_name"], pages=row["pages"])
             for row in rows
@@ -167,7 +188,7 @@ class RetrievalCache:
             self._store(keyword, documents)
 
     def _store(self, key: str, documents: list[CachedDocument]) -> None:
-        """整体替换一个键对应的全部法规和条文页范围。"""
+        """整体替换一个键对应的全部法规和条文页范围，并维持 LRU 上限。"""
         # 一个问题可能对应多部法规，每部法规保存一个多页范围字符串。
         unique_documents = list(dict.fromkeys(documents))
         with self._connect() as connection:
@@ -185,6 +206,27 @@ class RetrievalCache:
                     for document in unique_documents
                 ],
             )
+            self._evict_oldest(connection)
+
+    def _evict_oldest(self, connection: sqlite3.Connection) -> None:
+        """键数超过上限时，按 rowid 从老到新整键淘汰（LRU 语义，
+        命中的键已在 _load 中续到最新）。"""
+        distinct_keys = connection.execute(
+            """
+            SELECT question, MIN(rowid) AS oldest
+            FROM retrieval_cache
+            GROUP BY question
+            ORDER BY oldest
+            """
+        ).fetchall()
+        overflow = len(distinct_keys) - MAX_KEY_ENTRIES
+        if overflow <= 0:
+            return
+        oldest_keys = [row["question"] for row in distinct_keys[:overflow]]
+        connection.executemany(
+            "DELETE FROM retrieval_cache WHERE question = ?",
+            [(key,) for key in oldest_keys],
+        )
 
     def _initialize(self) -> None:
         """创建全新的多法规、多页缓存表。"""
