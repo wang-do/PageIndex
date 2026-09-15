@@ -24,7 +24,15 @@ from retrieval_cache import CachedDocument, RetrievalCache, is_complete_question
 DEFAULT_QUESTION = "宿舍、旅馆选址有什么规定？GB55025-2022"
 # DEFAULT_QUESTION = "详细说一下第一条"
 
-_INSTRUCTION_ZH = "Always answer in Simplified Chinese (简体中文)."
+_INSTRUCTION_ZH = (
+    "始终使用简体中文回答。"
+    "硬性规则：凡是与法规、条文、技术要求相关的问题，无论对话历史中是否"
+    "已有相关内容，都必须先调用检索工具查找当前适用的条文，再基于检索结果"
+    "组织回答。严禁仅凭对话历史中的条文摘录回答法规类问题——历史摘录只是"
+    "过往查询留下的片段，往往不完整，也可能与当前问题的适用范围不符。"
+    "唯一例外：与法规检索完全无关的纯对话（打招呼、让你复述上一句话等）"
+    "可以直接回应。"
+)
 
 
 def _describe_tool(item: dict) -> str:
@@ -41,7 +49,7 @@ def _describe_tool(item: dict) -> str:
     if name == "get_document_structure":
         return f"查看《{doc}》目录" if doc else "查看文档目录"
     if name == "get_page_content":
-        return f"查阅第 《{doc}》{pages} 条法规" if pages else f"查阅《{doc}》"
+        return f"查阅《{doc}》第{pages} 条法规" if pages else f"查阅《{doc}》"
     return name or "调用工具"
 
 
