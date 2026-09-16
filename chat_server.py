@@ -17,6 +17,7 @@ from conversation_history import ConversationHistory
 
 FRONTEND_FILE = Path(__file__).parent / "frontend" / "index.html"
 STORAGE_PATH = Path(".pageindex")
+PDF_DIR = Path(__file__).parent / "pdfs"
 history = ConversationHistory(STORAGE_PATH / "conversation_history.db")
 
 app = FastAPI()

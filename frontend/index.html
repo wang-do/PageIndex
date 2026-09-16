@@ -40,6 +40,9 @@
     .assistant pre code { padding: 0; background: transparent; }
     .assistant blockquote { margin: 0 0 10px; padding: 2px 12px; border-left: 3px solid #e0e0e0; color: #666; }
     .meta { margin-top: 8px; font-size: 14px; color: #b8b8b8; }
+    .refs { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .ref-btn { font-size: 12px; padding: 3px 10px; border: 1px solid #d9d9d9; border-radius: 12px; background: #f7f7f7; color: #555; cursor: pointer; }
+    .ref-btn:hover { background: #ebebeb; }
     .steps { margin: 0 0 10px; padding: 6px 10px 6px 12px; border-left: 3px solid #e5e5e5; background: #fafafa; border-radius: 6px; font-size: 12px; color: #8a8a8a; }
     .steps summary { cursor: pointer; }
     .steps li { margin: 3px 0 3px 6px; }
@@ -140,6 +143,25 @@
       return marked.parse(String(text), { breaks: true });
     }
 
+    // 引用按钮区：每条引用一个胶囊按钮，点击时把该条引用 JSON 传出
+    // （PDF 跳转/画红框的挂载点，后续在这里接入）。
+    function appendRefButtons(node, references) {
+      if (!Array.isArray(references) || references.length === 0) return;
+      const box = document.createElement('div');
+      box.className = 'refs';
+      for (const ref of references) {
+        const btn = document.createElement('button');
+        btn.className = 'ref-btn';
+        btn.textContent = `${ref.spec_name || ref.doc_name || ''} · ${ref.clause_no || ''} · 第${ref.page_pdf ?? '?'}页`;
+        btn.addEventListener('click', () => {
+          // TODO: PDF 跳转/画红框挂载点——此处拿到该条引用的完整 JSON
+          console.log('[引用] PDF 定位数据：', JSON.stringify(ref));
+        });
+        box.appendChild(btn);
+      }
+      node.appendChild(box);
+    }
+
     function addMessage(role, text, meta) {
       const empty = messages.querySelector('.empty');
       if (empty) empty.remove();
@@ -151,6 +173,7 @@
         node.textContent = text;
       }
       if (meta) {
+        appendRefButtons(node, meta.references);
         const parts = [meta.cached ? '命中缓存' : '未命中缓存'];
         if (meta.tokens != null) parts.push(`token：${meta.tokens}`);
         parts.push(`${meta.elapsed}s`);
@@ -228,7 +251,8 @@
       messages.replaceChildren();
       for (const message of history) {
         const meta = message.role === 'assistant' && message.elapsed != null
-          ? { cached: !!message.cached, tokens: message.tokens, elapsed: message.elapsed }
+          ? { cached: !!message.cached, tokens: message.tokens, elapsed: message.elapsed,
+              references: message.references }
           : undefined;
         addMessage(message.role, message.content, meta);
       }
@@ -465,6 +489,7 @@
           }
         }
         if (finalMeta) {
+          appendRefButtons(node, finalMeta.references);
           appendAnswerMeta(node, finalMeta);
           conversationTitle.textContent = finalMeta.title;
           const activeTitle = sessionList.querySelector('.session-row.active .session-open');

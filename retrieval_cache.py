@@ -145,7 +145,7 @@ class RetrievalCache:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT doc_name, pages
+                SELECT doc_name, pages, summary
                 FROM retrieval_cache
                 WHERE question = ?
                 ORDER BY rowid
@@ -162,11 +162,11 @@ class RetrievalCache:
                 )
                 connection.executemany(
                     """
-                    INSERT INTO retrieval_cache(question, doc_name, pages)
-                    VALUES (?, ?, ?)
+                    INSERT INTO retrieval_cache(question, doc_name, pages, summary)
+                    VALUES (?, ?, ?, ?)
                     """,
                     [
-                        (key, row["doc_name"], row["pages"])
+                        (key, row["doc_name"], row["pages"], row["summary"])
                         for row in rows
                     ],
                 )
@@ -175,19 +175,38 @@ class RetrievalCache:
             for row in rows
         ]
 
-    def put(self, question: str, documents: list[CachedDocument]) -> None:
+    def get_summary(self, question: str) -> str | None:
+        """返回该问题已缓存的要点总结（任一行非空即取）。"""
+        normalized_question = normalize_question(question)
+        if not normalized_question:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT summary
+                FROM retrieval_cache
+                WHERE question = ? AND summary IS NOT NULL
+                LIMIT 1
+                """,
+                (normalized_question,),
+            ).fetchone()
+        return row["summary"] if row else None
+
+    def put(self, question: str, documents: list[CachedDocument],
+            summary: str | None = None) -> None:
         """双写全文键和关键词串键（关键词键在含数字等问题上自动跳过）。"""
         if not documents:
             return
         normalized_question = normalize_question(question)
         if not normalized_question:
             return
-        self._store(normalized_question, documents)
+        self._store(normalized_question, documents, summary=summary)
         keyword = keyword_key(question)
         if keyword:
-            self._store(keyword, documents)
+            self._store(keyword, documents, summary=summary)
 
-    def _store(self, key: str, documents: list[CachedDocument]) -> None:
+    def _store(self, key: str, documents: list[CachedDocument],
+               summary: str | None = None) -> None:
         """整体替换一个键对应的全部法规和条文页范围，并维持 LRU 上限。"""
         # 一个问题可能对应多部法规，每部法规保存一个多页范围字符串。
         unique_documents = list(dict.fromkeys(documents))
@@ -198,11 +217,11 @@ class RetrievalCache:
             )
             connection.executemany(
                 """
-                INSERT INTO retrieval_cache(question, doc_name, pages)
-                VALUES (?, ?, ?)
+                INSERT INTO retrieval_cache(question, doc_name, pages, summary)
+                VALUES (?, ?, ?, ?)
                 """,
                 [
-                    (key, document.doc_name, document.pages)
+                    (key, document.doc_name, document.pages, summary)
                     for document in unique_documents
                 ],
             )
@@ -237,6 +256,7 @@ class RetrievalCache:
                 question TEXT NOT NULL,
                 doc_name TEXT NOT NULL,
                 pages TEXT NOT NULL,
+                summary TEXT,
                 PRIMARY KEY (question, doc_name)
             )
             """

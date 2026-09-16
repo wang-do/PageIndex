@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -42,14 +43,23 @@ class ConversationHistory:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT role, content, cached, tokens, elapsed
+                SELECT role, content, cached, tokens, elapsed, "references"
                 FROM conversation_messages
                 WHERE session_id = ?
                 ORDER BY id
                 """,
                 (session_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            if item.get("references"):
+                try:
+                    item["references"] = json.loads(item["references"])
+                except (TypeError, ValueError):
+                    item["references"] = None
+            result.append(item)
+        return result
 
     def create_session(self, session_id: str) -> None:
         """创建空会话。"""
@@ -137,8 +147,12 @@ class ConversationHistory:
         cached: bool | None = None,
         tokens: int | None = None,
         elapsed: float | None = None,
+        references: list | None = None,
     ) -> None:
-        """保存一轮用户问题和 AI 回答（assistant 行附带缓存/token/耗时统计）。"""
+        """保存一轮用户问题和 AI 回答（assistant 行附带缓存/token/耗时/引用）。"""
+        references_json = (
+            json.dumps(references, ensure_ascii=False) if references else None
+        )
         with self._connect() as connection:
             connection.execute(
                 """
@@ -157,12 +171,15 @@ class ConversationHistory:
             )
             connection.executemany(
                 """
-                INSERT INTO conversation_messages(session_id, role, content, cached, tokens, elapsed)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO conversation_messages(
+                    session_id, role, content, cached, tokens, elapsed, "references"
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    (session_id, "user", question, None, None, None),
-                    (session_id, "assistant", answer, cached, tokens, elapsed),
+                    (session_id, "user", question, None, None, None, None),
+                    (session_id, "assistant", answer, cached, tokens, elapsed,
+                     references_json),
                 ],
             )
 
@@ -187,7 +204,8 @@ class ConversationHistory:
                     content TEXT NOT NULL,
                     cached INTEGER,
                     tokens INTEGER,
-                    elapsed REAL
+                    elapsed REAL,
+                    "references" TEXT
                 )
                 """
             )
@@ -195,25 +213,6 @@ class ConversationHistory:
                 """
                 CREATE INDEX IF NOT EXISTS idx_conversation_messages_session
                 ON conversation_messages(session_id, id)
-                """
-            )
-            # 兼容增加会话表之前已经保存的对话。
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO conversation_sessions(session_id, title, updated_at)
-                SELECT messages.session_id,
-                       COALESCE(
-                           (SELECT first_message.content
-                            FROM conversation_messages AS first_message
-                            WHERE first_message.session_id = messages.session_id
-                              AND first_message.role = 'user'
-                            ORDER BY first_message.id
-                            LIMIT 1),
-                           '新会话'
-                       ),
-                       MAX(messages.id)
-                FROM conversation_messages AS messages
-                GROUP BY messages.session_id
                 """
             )
 

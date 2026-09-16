@@ -17,7 +17,9 @@ from time import perf_counter
 from typing import Optional
 
 from conversation_history import ConversationHistory
+from clause_index import resolve as resolve_refs
 from pageindex import PageIndexLocalClient
+from reference_merge import merge_references
 from retrieval_cache import CachedDocument, RetrievalCache, is_complete_question
 
 
@@ -26,13 +28,29 @@ DEFAULT_QUESTION = "宿舍、旅馆选址有什么规定？GB55025-2022"
 
 _INSTRUCTION_ZH = (
     "始终使用简体中文回答。"
+    "回答要求：对检索到的法规内容做总结提炼后回答，禁止原样照抄条文原文"
+    "或逐条罗列条文。回答的粒度要与提问匹配：宽泛的问题（如「××有什么"
+    "要求」）就给出宽泛的概括——点出涉及哪些规范、哪些章节、核心要求是什么"
+    "即可，不需要细化到每一条；只有提问明确针对某一条的具体内容时才展开"
+    "该条。尽可能精简，能一句话说清的不写两句。提到具体条文时标注出处"
+    "（如「GB50016 第6.4节」或「6.4.1」）。"
     "硬性规则：凡是与法规、条文、技术要求相关的问题，无论对话历史中是否"
     "已有相关内容，都必须先调用检索工具查找当前适用的条文，再基于检索结果"
-    "组织回答。严禁仅凭对话历史中的条文摘录回答法规类问题——历史摘录只是"
-    "过往查询留下的片段，往往不完整，也可能与当前问题的适用范围不符。"
+    "组织回答；而且必须调用 get_page_content 获取条文原文——仅浏览文档目录"
+    "不算完成检索，禁止在未读取条文原文的情况下回答法规类问题。严禁仅凭对话"
+    "历史中的条文摘录回答法规类问题——历史摘录只是过往查询留下的片段，往往"
+    "不完整，也可能与当前问题的适用范围不符。"
     "唯一例外：与法规检索完全无关的纯对话（打招呼、让你复述上一句话等）"
     "可以直接回应。"
 )
+
+
+def _build_references(doc_pages: list[tuple[str, str]]) -> list[dict]:
+    """(法规名, 逻辑页号) 列表 → 条文定位列表（法规名/PDF页/章节/bbox）。"""
+    references: list[dict] = []
+    for doc_name, pages in doc_pages:
+        references.extend(resolve_refs(doc_name, pages))
+    return merge_references(references)
 
 
 def _describe_tool(item: dict) -> str:
@@ -79,30 +97,20 @@ def ask_question(
         cached_documents = cache.get(question) or cache.get_by_keyword(question)
     else:
         cached_documents = []
-    if cached_documents:
-        documents = {
-            document["name"]: document["id"]
-            for document in client.list_documents()["documents"]
-        }
-    else:
-        documents = {}
 
-    if cached_documents and all(document.doc_name in documents for document in cached_documents):
-        yield {"type": "step", "text": "命中缓存，直接读取条文"}
-        markdown_parts: list[str] = []
-        for cached_document in cached_documents:
-            # 每部法规的一组条文页通过一次 PageIndex 调用读回。
-            pages = client.get_page_content(
-                documents[cached_document.doc_name], cached_document.pages
-            )
-
-            clause_text = "\n\n".join(page["markdown"] for page in pages)
-            markdown_parts.append(f"法规：{cached_document.doc_name}\n{clause_text}")
-        answer = "\n\n".join(markdown_parts)
+    # 命中且已有要点总结 → 直接秒回（零模型调用）；无总结则走导航重新生成。
+    summary = cache.get_summary(question) if cached_documents else None
+    if cached_documents and summary:
+        references = _build_references(
+            [(d.doc_name, d.pages) for d in cached_documents]
+        )
+        answer = summary
         elapsed = round(perf_counter() - started_at, 1)
-        history.append_turn(session_id, question, answer, cached=True, tokens=None, elapsed=elapsed)
+        history.append_turn(session_id, question, answer, cached=True, tokens=None,
+                            elapsed=elapsed, references=references)
         yield {"type": "delta", "text": answer}
-        yield {"type": "done", "answer": answer, "cached": True, "tokens": None, "elapsed": elapsed}
+        yield {"type": "done", "answer": answer, "cached": True, "tokens": None,
+               "elapsed": elapsed, "references": references}
         return
 
     # 未命中：流式 agentic 导航，把工具调用与答案增量实时抛给调用方。
@@ -150,23 +158,35 @@ def ask_question(
             part.get("text", "") for part in (last.get("content") or [])
             if isinstance(part, dict)
         )
+    # 结构化引用：检索到的 (法规, 逻辑页) → 条文定位（真实调用数据，非模型生成）。
+    references = _build_references([
+        (arguments.get("doc_name"), arguments.get("pages"))
+        for arguments in (
+            json.loads(item["arguments"])
+            for item in items
+            if item.get("type") == "function_call" and item.get("name") == "get_page_content"
+        )
+        if arguments.get("doc_name") and arguments.get("pages")
+    ])
     history.append_turn(session_id, question, answer,
-                        cached=False, tokens=tokens or None, elapsed=elapsed)
+                        cached=False, tokens=tokens or None, elapsed=elapsed,
+                        references=references)
 
-    # 只有完整问题的全库检索结果才写入全局缓存。
+    # 只有完整问题的全库检索结果才写入全局缓存（条文定位 + 要点总结）。
     if doc_ids is None and complete_question:
-        cache_retrieval_paths(cache, question, {"items": items})
+        cache_retrieval_paths(cache, question, {"items": items}, summary=answer)
 
     yield {"type": "done", "answer": answer, "cached": False,
-           "tokens": tokens or None, "elapsed": elapsed}
+           "tokens": tokens or None, "elapsed": elapsed, "references": references}
 
 
 def cache_retrieval_paths(
     cache: RetrievalCache,
     question: str,
     response: dict,
+    summary: str | None = None,
 ) -> None:
-    """缓存本轮各法规的 get_page_content 多页参数。"""
+    """缓存本轮各法规的 get_page_content 多页参数（可附带要点总结）。"""
 
     # 只缓存实际读取过的条文页，不缓存目录浏览或最终回答。
     page_calls = [
@@ -192,7 +212,7 @@ def cache_retrieval_paths(
     ]
     if cached_documents:
         # 同一问题的旧定位整体替换，避免保留过期或错误的页。
-        cache.put(question, cached_documents)
+        cache.put(question, cached_documents, summary=summary)
 
 
 def main() -> None:

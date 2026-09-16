@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 from pageindex import PageIndexLocalClient
@@ -13,6 +14,10 @@ PROJECT_DIR = Path(__file__).resolve().parent
 
 ## 可以把需要读的法规全部放在这
 DEFAULT_JSON_PATHS = "C:\\Users\\localuser\\Desktop\\王栋焱\\法律RAG\\json后处理\\pageindex_json"
+
+# 原始 tree JSON（含 position：PDF 页码/印刷页码/页内 bbox）所在目录。
+# 导入时归档为 .pageindex/docs/{doc_id}/raw_tree.json，供引用定位使用。
+TREE_JSON_DIR = PROJECT_DIR.parent / "json后处理" / "tree_json"
 
 
 
@@ -34,6 +39,17 @@ def get_document_name(json_path: Path) -> str:
     return document_name
 
 
+def archive_raw_tree(json_path: Path, doc_id: str, storage_path: Path) -> bool:
+    """把带 position 的原始 tree JSON 归档到文档目录（raw_tree.json）。"""
+    tree_src = TREE_JSON_DIR / f"{json_path.stem.removesuffix('_pageindex')}_tree.json"
+    if not tree_src.exists():
+        return False
+    dest = storage_path / "docs" / doc_id / "raw_tree.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(tree_src, dest)
+    return True
+
+
 def import_structure_json(json_paths: Path, storage_path: Path) -> list[dict]:
     """导入多份法规 JSON；同名文档已存在时跳过。"""
 
@@ -49,13 +65,16 @@ def import_structure_json(json_paths: Path, storage_path: Path) -> list[dict]:
     json_list = list(Path(json_paths).glob('*.json'))
 
     for json_path in json_list:
-  
+
         document_name = get_document_name(json_path)
         if document_name in existing_names:
             results.append({"name": document_name, "status": "skipped"})
             continue
         result = client.submit_structure_json(str(json_path))
-        results.append({"name": result["name"], "doc_id": result["doc_id"], "status": "imported"})
+        doc_id = result["doc_id"]
+        archived = archive_raw_tree(json_path, doc_id, storage_path)
+        results.append({"name": result["name"], "doc_id": doc_id,
+                        "status": "imported", "raw_tree": archived})
         existing_names.add(result["name"])
     return results
 
