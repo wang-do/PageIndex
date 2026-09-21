@@ -32,9 +32,9 @@ from typing import Any, Callable, Optional
 from .errors import PageIndexAPIError
 
 TOOL_RESPONSE_CHAR_LIMIT = 100_000
+_CHAR_BUDGET = int(TOOL_RESPONSE_CHAR_LIMIT * 0.95)
 STRUCTURE_FIRST_PAGE_THRESHOLD = 20
 
-_CHAR_BUDGET = int(TOOL_RESPONSE_CHAR_LIMIT * 0.95)
 _MAX_REQUESTED_PAGES = 10_000
 _SIMILAR_NAMES_LIMIT = 3
 _TOOL_WAIT_TIMEOUT = 180.0  # "up to 3 minutes", per the wait_for_completion schema
@@ -185,8 +185,11 @@ TOOL_CONTRACT: dict[str, dict[str, Any]] = {
             f"page references). REQUIRED for documents over "
             f"{STRUCTURE_FIRST_PAGE_THRESHOLD} pages — call this first to "
             "locate relevant sections, then pass their page numbers to "
-            "`get_page_content()`. Use the `part` parameter to iterate large "
-            "outlines until `pagination.has_more` is false."
+            "`get_page_content()`. The outline is progressive: without "
+            "`node_id` you get the TOP level only (chapters); pass a "
+            "`node_id` from a previous response to drill into that node's "
+            "next level. Drill down level by level until you reach clauses, "
+            "then call `get_page_content()`."
         ),
         "schema": {
             "type": "object",
@@ -195,6 +198,14 @@ TOOL_CONTRACT: dict[str, dict[str, Any]] = {
                     "type": "string",
                     "minLength": 1,
                     "description": _DOC_NAME_DESCRIPTION,
+                },
+                "node_id": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "description": (
+                        "Optional node to drill into (copy `node_id` verbatim "
+                        "from a previous response). Omit or null for the "
+                        "document's top level."
+                    ),
                 },
                 "folder_id": {
                     "anyOf": [{"type": "string"}, {"type": "null"}],
@@ -641,76 +652,10 @@ def _format_page_spec(pages: list[int]) -> str:
 
 # ── structure formatting / splitting ──
 
-_STRUCTURE_KEY_ORDER = ("title", "node_id", "start_index", "end_index",
-                        "page_index", "prefix_summary", "summary", "nodes")
-
-
-def _format_structure(node: Any) -> Any:
-    """Drop node text and normalize key order, recursively."""
-    if isinstance(node, list):
-        return [_format_structure(item) for item in node]
-    if isinstance(node, dict):
-        stripped = {key: value for key, value in node.items() if key != "text"}
-        if "nodes" in stripped:
-            stripped["nodes"] = _format_structure(stripped["nodes"])
-        ordered = {key: stripped[key] for key in _STRUCTURE_KEY_ORDER
-                   if key in stripped}
-        ordered.update({key: value for key, value in stripped.items()
-                        if key not in ordered})
-        return ordered
-    return node
-
-
 def _serialized_size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False))
 
 
-def _split_structure(structure: Any, budget: int) -> list[Any]:
-    """Split a formatted structure into chunks of at most ~budget serialized
-    chars. The paginated response shape matches the cloud tool (its chunk
-    type admits node-or-list); chunk boundaries are implementation-defined.
-    An unsplit structure keeps its natural shape; once split, every chunk
-    is a list of nodes — the `structure` field must not change JSON type
-    between parts of one paginated response."""
-    if _serialized_size(structure) <= budget:
-        return [structure]
-    nodes = structure if isinstance(structure, list) else [structure]
-    chunks: list[Any] = []
-    group: list[Any] = []
-    group_size = 0
-    for node in nodes:
-        size = _serialized_size(node)
-        if size > budget:
-            if group:
-                chunks.append(group)
-                group, group_size = [], 0
-            chunks.extend([part]
-                          for part in _split_oversized_node(node, budget))
-            continue
-        if group and group_size + size > budget:
-            chunks.append(group)
-            group, group_size = [], 0
-        group.append(node)
-        group_size += size
-    if group:
-        chunks.append(group)
-    return chunks or [structure]
-
-
-def _split_oversized_node(node: Any, budget: int) -> list[Any]:
-    children = node.get("nodes") if isinstance(node, dict) else None
-    if not children:
-        return [node]
-    shell = {key: value for key, value in node.items() if key != "nodes"}
-    shell_size = _serialized_size(shell)
-    child_budget = max(budget - shell_size, budget // 2)
-    parts = []
-    for chunk in _split_structure(children, child_budget):
-        # A recursive result is either the unsplit children (natural shape)
-        # or always-list chunks; normalize for the shell's "nodes".
-        parts.append({**shell,
-                      "nodes": chunk if isinstance(chunk, list) else [chunk]})
-    return parts
 
 
 # ── tool implementations (client-backed; mode-blind) ──
@@ -897,8 +842,24 @@ def _get_document(client, doc_name: str, folder_id: Optional[str] = None,
     })
 
 
+def _find_node(node, node_id: str):
+    """按 node_id 在树中定位节点（支持 list 与 dict 两种树根）。"""
+    if isinstance(node, list):
+        for item in node:
+            found = _find_node(item, node_id)
+            if found is not None:
+                return found
+        return None
+    if isinstance(node, dict):
+        if node.get("node_id") == node_id:
+            return node
+        return _find_node(node.get("nodes") or [], node_id)
+    return None
+
+
 def _get_document_structure(client, doc_name: str,
                             folder_id: Optional[str] = None, part: int = 1,
+                            node_id: Optional[str] = None,
                             wait_for_completion: bool = False,
                             _allowed_ids: Optional[frozenset] = None) -> tuple[dict, bool]:
     if folder_id not in (None, "root"):
@@ -918,7 +879,7 @@ def _get_document_structure(client, doc_name: str,
         raw_tree = getattr(getattr(client, "_api", None), "raw_tree", None)
         tree = raw_tree(entry["id"]) if raw_tree is not None else None
         if tree is None:
-            # _format_structure strips text anyway — don't download it.
+            # Don't download text — the caller only needs the outline.
             tree = client.get_tree(entry["id"], node_summary=True,
                                    include_text=False).get("result")
     except PageIndexAPIError as exc:
@@ -949,56 +910,66 @@ def _get_document_structure(client, doc_name: str,
             "INTERNAL_ERROR",
         )
 
-    formatted = _format_structure(tree)
-    chunks = _split_structure(formatted, _CHAR_BUDGET)
-    total_parts = max(1, len(chunks))
-    try:
-        requested_part = int(part)
-    except (TypeError, ValueError):
-        requested_part = 1
-    current = min(max(requested_part, 1), total_parts)
+    # 渐进式下钻：node_id 未给定 → 返回第一层（顶层各章）；给定 → 返回该
+    # 节点的下一层子节点列表。每层只带 title/页范围/has_children，不带
+    # summary（条文导入模式下 summary 是条文全文，是工具结果体积的大头）。
+    # tree.json 顶层是多根 list（附录 A/B/C + 各章各为一个根）。
+    if node_id:
+        target = _find_node(tree, node_id)
+        if target is None:
+            return _failure(
+                f"node_id not found in document: {node_id}",
+                {"doc_name": doc_name, "node_id": node_id},
+                {"summary": "Unknown node_id",
+                 "options": ["Copy node_id verbatim from a previous "
+                             "get_document_structure response",
+                             "Call without node_id to restart from the top level"]},
+                "INVALID_INPUT",
+            )
+        children = target.get("nodes") or []
+        header = {"doc_name": doc_name, "node_id": target.get("node_id"),
+                  "title": target.get("title")}
+    else:
+        target = None
+        children = tree if isinstance(tree, list) else [tree]
+        header = {"doc_name": doc_name,
+                  "title": "(document top level)",
+                  "node_id": None}
 
-    if total_parts == 1:
-        return _success(
-            {"doc_name": doc_name, "structure": chunks[0]},
-            {
-                "summary": "Document structure retrieved successfully.",
-                "options": [
-                    "Use get_page_content() to extract specific content from pages",
-                ],
-            },
-        )
+    outline = []
+    for child in children:
+        entry = {
+            "start_index": child.get("start_index"),
+            "end_index": child.get("end_index"),
+        }
+        if child.get("clause_no"):
+            entry["clause_no"] = child["clause_no"]
+        has_children = bool(child.get("nodes"))
+        entry["has_children"] = has_children
+        if has_children:
+            entry["node_id"] = child["node_id"]
+        # summary 前置 title：每层节点都带语义（章/节是概要，条文是全文），
+        # 模型在任意层都能判断内容相关性，支撑"宽泛问题到章节层泛答"。
+        title = (child.get("title") or "").strip()
+        summary = (child.get("summary") or "").strip()
+        label = f"{title}：{summary}" if title and summary else (title or summary)
+        if label:
+            entry["summary"] = label
+        outline.append(entry)
 
-    next_steps = (
-        {
-            "summary": f"Showing part {current} of {total_parts}.",
-            "options": [
-                f"Request next part with part: {current + 1}",
-                f"Jump to last part with part: {total_parts}",
-                "Proceed to get_page_content() for specific sections",
-            ],
-        }
-        if current < total_parts else
-        {
-            "summary": "All parts retrieved for current pagination.",
-            "options": [
-                "Use get_page_content() to extract specific content from pages",
-            ],
-        }
-    )
-    return _success(
-        {
-            "doc_name": doc_name,
-            "total_parts": total_parts,
-            "structure": chunks[current - 1],
-            "pagination": {
-                "part": current,
-                "total_parts": total_parts,
-                "has_more": current < total_parts,
-            },
-        },
-        next_steps,
-    )
+    payload = {
+        **header,
+        "child_count": len(outline),
+        "children": outline,
+    }
+    next_steps = {
+        "summary": (f"Level with {len(outline)} node(s). Nodes with "
+                    f"has_children=true can be drilled into via node_id; "
+                    f"leaves are clauses — use get_page_content() with their "
+                    f"start_index~end_index page range."),
+        "options": ["Use get_page_content() to read the clause text"],
+    }
+    return _success(payload, next_steps)
 
 
 def _get_page_content(client, doc_name: str, pages: str,
@@ -1553,42 +1524,55 @@ def build_agent_tools(client, include_management: bool = False,
 # ── agent instructions ──
 
 _INSTRUCTIONS_HEADER = (
-    "PageIndex by Vectify AI is a document platform for uploading and "
-    "managing long PDFs (research papers, financial reports, legal docs, "
-    "textbooks, etc.)."
+    "中望建筑法规智能助手是一个建筑法规问答助手，知识库收录建筑行业规范条文"
+    "（防火、给排水、暖通、电气等专业），用于回答条文相关的技术与设计问题。"
 )
 
 _READING_WORKFLOW = f"""\
-READING WORKFLOW:
-- For documents over {STRUCTURE_FIRST_PAGE_THRESHOLD} pages: call get_document_structure() first to locate relevant sections, then get_page_content() with targeted page ranges.
-- For small documents ({STRUCTURE_FIRST_PAGE_THRESHOLD} pages or fewer): call get_page_content() directly."""
+阅读流程：
+- 超过 {STRUCTURE_FIRST_PAGE_THRESHOLD} 页的文档：先调用 get_document_structure() 查看
+  第一层章节列表（含每章概要与页范围）；对相关章节，把响应中的 node_id 传回同一工具
+  逐层下钻，直到定位到目标条文的页号，再用 get_page_content() 读取该页范围的条文原文。
+  每次调用只返回一层的节点列表。
+- 小文档（{STRUCTURE_FIRST_PAGE_THRESHOLD} 页以内）：直接调用 get_page_content()。"""
 
 _TOOL_USAGE_RULES = """\
-TOOL USAGE RULES:
-- Invoke a tool only when all required parameters are present or clearly inferable. Never invent placeholder values.
-- If a tool returns an error, present the provided next_steps/options to the user instead of retrying blindly."""
+工具使用规则：
+- 只有在所有必需参数都已具备或可明确推断时才调用工具，绝不编造占位值。
+- 工具返回错误时，把返回的 next_steps/options 告知用户，不要盲目重试。"""
 
 _DISCOVERY = """\
-DOCUMENT DISCOVERY:
-- browse_documents() — DEFAULT discovery tool, first choice for any document-related question. It lists your documents newest first with names and descriptions; match them against the user's intent, and page through with `offset: next_offset` while has_more is true."""
+文档发现：
+- browse_documents() —— 默认的文档发现工具，任何涉及文档的问题优先调用它。
+  它按时间倒序列出文档的名称和描述；将结果与用户意图匹配，
+  如果 has_more 为 true，用 `offset: next_offset` 翻页继续。
+- 召回完备性（硬性要求）：同一主题往往同时出现在多本规范中（强制性通用规范
+  GB55xxx 与专门标准并存）。浏览后必须从列表中找出【所有】与问题主题相关的
+  法规并逐一检索，宁多勿漏——不能因为在其中一本里找到了答案就停止。"""
 
 _DECISION = """\
-DECISION:
-- "What do I have / list / recent" → browse_documents()
-- ANY question that needs a document to answer (including "find THE paper about Y") → browse_documents(), then pick the documents whose name/description matches the question"""
+决策规则：
+- 「我有哪些文档 / 列一下 / 最近的」→ browse_documents()
+- 任何需要文档才能回答的问题（包括「找关于 Y 的那篇文档」）→ 先 browse_documents()，
+  再从结果中挑出名称/描述与问题匹配的文档"""
 
 _AFTER_DISCOVERY = """\
-- Skip discovery ONLY for questions with NO possible document connection (e.g., "capital of France").
-- After discovery: 1 match or 1 clearly best match → proceed to read and answer without asking. Multiple equally relevant → ask user to pick.
-- Results returned ≠ correct results. If the returned documents do not clearly match the user's intent (e.g., wrong topic, wrong time period, wrong document type), treat it the same as "not found" and continue the PERSISTENCE protocol below."""
+- 仅当问题与任何文档都不可能有关系时（例如「法国的首都是哪里」）才跳过文档发现。
+- 发现之后：只有 1 个匹配或明显最佳匹配 → 直接阅读并回答，不必询问用户；
+  多个同样相关 → 请用户选择。
+- 返回结果 ≠ 正确结果。如果返回的文档与用户意图明显不符（主题、时期、文档类型不对），
+  视同「未找到」，继续执行下面的 PERSISTENCE 协议。"""
 
 _PERSISTENCE = """\
-PERSISTENCE (before concluding the target document is not in the library):
-This protocol applies both when results are empty AND when results are returned but none match the user's intent. Do NOT give up after a single discovery attempt. Follow these steps in order:
-1. browse_documents() and compare every returned name/description against the user's intent
-2. Page through the ENTIRE library with `limit: 50` and `offset: next_offset` until has_more is false — MANDATORY, must be completed before concluding "not found"
-3. Re-scan for loose matches: synonyms, abbreviations, and partial titles in names/descriptions can identify the target
-Only after ALL three steps have been tried may you conclude the document is not in the library. Do NOT fall back to general knowledge — if the user's question references their own documents, exhaust every discovery path first."""
+持久性协议（在得出目标文档不在库中的结论之前）：
+本协议同时适用于「结果为空」和「有结果但都不匹配用户意图」两种情况。
+不要一次发现失败就放弃，按顺序执行以下步骤：
+1. browse_documents() 并将每条返回的名称/描述与用户意图比对
+2. 用 `limit: 50` 和 `offset: next_offset` 翻完整库直到 has_more 为 false —— 必须完成，
+   才允许得出「未找到」的结论
+3. 宽松匹配复查：名称/描述中的同义词、缩写、部分标题都可能指向目标
+只有三步全部尝试过，才允许得出文档不在库中的结论。不要退回通用知识作答 ——
+如果用户的问题指向他们自己的文档，必须穷尽所有发现路径。"""
 
 AGENT_INSTRUCTIONS = "\n\n".join([
     _INSTRUCTIONS_HEADER,

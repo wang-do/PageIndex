@@ -270,70 +270,6 @@ def test_get_document_duplicate_names_resolve_newest(client, store_path):
 
 # ── get_document_structure ──
 
-def test_structure_strips_text_and_orders_keys(client, store_path):
-    seed_doc(store_path, "pi-a", "report.pdf")
-    payload, is_error = run(client, "get_document_structure", doc_name="report.pdf")
-    assert not is_error
-    assert payload["doc_name"] == "report.pdf"
-    assert "pagination" not in payload and "total_parts" not in payload
-    serialized = json.dumps(payload["structure"])
-    assert "ROOT TEXT" not in serialized and "INTRO TEXT" not in serialized
-    # Cloud structure node shape: start_index/end_index/summary (live-verified).
-    root = payload["structure"][0]
-    assert list(root)[:4] == ["title", "node_id", "start_index", "end_index"]
-    assert root["summary"] == "root summary"
-    assert (root["start_index"], root["end_index"]) == (1, 2)
-    assert root["nodes"][0]["summary"] == "intro summary"
-    assert root["nodes"][0]["end_index"] == 1
-
-
-def test_structure_multipart_pagination(client, store_path):
-    big_tree = [{
-        "title": f"Chapter {index}", "node_id": f"{index:04d}",
-        "start_index": index + 1, "end_index": index + 1,
-        "summary": "s" * 4000, "text": "T",
-    } for index in range(60)]
-    seed_doc(store_path, "pi-big", "big.pdf", tree=big_tree,
-             pages=[{"page_index": 1, "markdown": "x"}])
-    first, _ = run(client, "get_document_structure", doc_name="big.pdf")
-    assert first["total_parts"] > 1
-    assert first["pagination"] == {
-        "part": 1, "total_parts": first["total_parts"], "has_more": True,
-    }
-    titles = []
-    for part in range(1, first["total_parts"] + 1):
-        payload, _ = run(client, "get_document_structure", doc_name="big.pdf",
-                         part=part)
-        # Every part of one paginated response is a list — a consumer that
-        # iterates part 1 must not silently iterate dict keys on part 2.
-        assert isinstance(payload["structure"], list)
-        titles.extend(node["title"] for node in payload["structure"])
-        assert payload["pagination"]["has_more"] == (part < first["total_parts"])
-    assert titles == [f"Chapter {index}" for index in range(60)]
-
-    clamped, _ = run(client, "get_document_structure", doc_name="big.pdf",
-                     part=999)
-    assert clamped["pagination"]["part"] == first["total_parts"]
-
-
-def test_split_structure_chunks_never_change_type():
-    """A single-node group used to come out as a bare dict while its
-    sibling parts were lists — same response sequence, flipping JSON type."""
-    from pageindex.agent_tools import _split_structure
-    small = {"title": "s", "node_id": "0001"}
-    big = {"title": "b", "node_id": "0002",
-           "nodes": [{"title": f"c{index}", "summary": "x" * 40}
-                     for index in range(10)]}
-    chunks = _split_structure([small, small, big], 200)
-    assert len(chunks) > 1
-    assert all(isinstance(chunk, list) for chunk in chunks)
-    # Unsplit structures keep their natural shape (cloud fallback parity).
-    assert _split_structure(small, 10_000) == [small]
-    assert _split_structure([small], 10_000) == [[small]]
-
-
-# ── get_page_content ──
-
 def test_page_content(client, store_path):
     seed_doc(store_path, "pi-a", "report.pdf")
     payload, is_error = run(client, "get_page_content", doc_name="report.pdf",
@@ -2240,7 +2176,7 @@ def test_live_cloud_instructions_nonempty():
 def test_agent_instructions_default(client):
     text = client.agent_instructions()
     assert text == AGENT_INSTRUCTIONS
-    assert "READING WORKFLOW" in text
+    assert "阅读流程" in text
     assert "browse_documents" in text
     assert "search_documents" not in text
     assert "get_folder_structure" not in text

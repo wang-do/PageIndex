@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from time import perf_counter
 from typing import Optional
@@ -20,37 +21,149 @@ from conversation_history import ConversationHistory
 from clause_index import resolve as resolve_refs
 from pageindex import PageIndexLocalClient
 from reference_merge import merge_references
-from retrieval_cache import CachedDocument, RetrievalCache, is_complete_question
+from retrieval_cache import RetrievalCache, is_complete_question
 
 
 DEFAULT_QUESTION = "宿舍、旅馆选址有什么规定？GB55025-2022"
 # DEFAULT_QUESTION = "详细说一下第一条"
 
 _INSTRUCTION_ZH = (
-    "始终使用简体中文回答。"
+    "始终使用简体中文回答——包括工具调用之间的任何过程说明，一律用简体中文。"
+
+    "导航方法：对长文档先用 get_document_structure(doc_name) 查看第一层"
+    "章节列表；选中相关章节后，把该节点的 node_id 传回"
+    " get_document_structure(doc_name, node_id=…) 逐层下钻——响应里"
+    " has_children=true 的节点可继续下钻，has_children=false 的条文叶带"
+    " start_index 页号；定位到目标条文页后用 get_page_content(doc_name,"
+    " pages=页号) 读取条文。每层只返回该层节点，不要期望一次看到全文档目录。"
+    "多法规召回（硬性要求）：同一规定往往同时出现在多本规范中——强制性"
+    "通用规范与专门标准"
+    "条文大量同文。browse 之后，必须从法规列表中找出【所有】与问题主题可能"
+    "相关的法规并逐一检索，宁多勿漏：不能因为在一本规范里找到了答案就停止，"
+    "凡是名称、描述或章节概要与问题主题沾边的规范都要下钻核对。回答时把"
+    "检索到的多本规范的相关条文并列引用，标明各自出处。"
     "回答要求：对检索到的法规内容做总结提炼后回答，禁止原样照抄条文原文"
     "或逐条罗列条文。回答的粒度要与提问匹配：宽泛的问题（如「××有什么"
     "要求」）就给出宽泛的概括——点出涉及哪些规范、哪些章节、核心要求是什么"
     "即可，不需要细化到每一条；只有提问明确针对某一条的具体内容时才展开"
     "该条。尽可能精简，能一句话说清的不写两句。提到具体条文时标注出处"
-    "（如「GB50016 第6.4节」或「6.4.1」）。"
+    "（如「GB50016 第6.4.1条」）。"
     "硬性规则：凡是与法规、条文、技术要求相关的问题，无论对话历史中是否"
     "已有相关内容，都必须先调用检索工具查找当前适用的条文，再基于检索结果"
     "组织回答；而且必须调用 get_page_content 获取条文原文——仅浏览文档目录"
-    "不算完成检索，禁止在未读取条文原文的情况下回答法规类问题。严禁仅凭对话"
-    "历史中的条文摘录回答法规类问题——历史摘录只是过往查询留下的片段，往往"
-    "不完整，也可能与当前问题的适用范围不符。"
+    "或章节结构不算完成检索，禁止在未读取条文原文的情况下回答法规类问题。"
+    "特别注意：即使你自认为知道答案（消防车道、防火门等常见设施的规定你"
+    "记忆中有），也必须先检索——你的记忆可能过时、不完整，且所有回答都必须"
+    "能通过引用溯源。严禁仅凭对话历史中的条文摘录回答法规类问题——历史摘录"
+    "只是过往查询留下的片段，往往不完整，也可能与当前问题的适用范围不符。"
     "唯一例外：与法规检索完全无关的纯对话（打招呼、让你复述上一句话等）"
     "可以直接回应。"
 )
 
 
-def _build_references(doc_pages: list[tuple[str, str]]) -> list[dict]:
-    """(法规名, 逻辑页号) 列表 → 条文定位列表（法规名/PDF页/章节/bbox）。"""
-    references: list[dict] = []
-    for doc_name, pages in doc_pages:
-        references.extend(resolve_refs(doc_name, pages))
+
+
+
+
+def _references_from_items(items: list[dict]) -> list[dict]:
+    """从 agentic transcript 提取全部条文溯源。
+
+    两个来源（去重后合并）：
+    1. get_page_content 的 (doc_name, pages) —— 读了条文原文的页
+    2. get_document_structure 响应中的条文叶（has_children=false、summary
+       以条款号开头）—— 模型在逐层下钻时直接"读到"的条文（summary=全文），
+       即使没有再调 get_page_content 也要计入溯源
+    """
+    outputs = {it.get("call_id"): it.get("output", "")
+               for it in items
+               if isinstance(it, dict) and it.get("type") == "function_call_output"}
+    doc_pages: list[tuple[str, str]] = []
+    structure_leaves: list[tuple[str, int]] = []
+    for it in items:
+        if not (isinstance(it, dict) and it.get("type") == "function_call"):
+            continue
+        name = it.get("name")
+        try:
+            args = json.loads(it.get("arguments") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if name == "get_page_content":
+            if args.get("doc_name") and args.get("pages"):
+                doc_pages.append((args["doc_name"], args["pages"]))
+        elif name == "get_document_structure":
+            if not args.get("doc_name"):
+                continue
+            out = outputs.get(it.get("call_id"), "")
+            try:
+                env = json.loads(out) if isinstance(out, str) else {}
+            except (TypeError, ValueError):
+                continue
+            doc_name = args.get("doc_name")
+            for child in env.get("children") or []:
+                if not isinstance(child, dict) or child.get("has_children"):
+                    continue  # 只取条文叶
+                page = child.get("start_index")
+                if not isinstance(page, int):
+                    continue
+                structure_leaves.append((doc_name, page))
+
+    references = [
+        {**ref, "source": "page"}          # 读了原文的页 → page 来源
+        for doc_name, pages in doc_pages
+        for ref in resolve_refs(doc_name, pages)
+    ]
+    seen = {(r.get("spec_no"), r.get("clause_no")) for r in references}
+    for doc_name, page in structure_leaves:
+        for r in resolve_refs(doc_name, str(page)):
+            key = (r.get("spec_no"), r.get("clause_no"))
+            if key not in seen:
+                seen.add(key)
+                references.append({**r, "source": "leaf"})   # 下钻路过的叶子 → leaf 来源
     return merge_references(references)
+
+
+_CITE_PAIR = re.compile(
+    r"([A-Z]{2,}[0-9A-Za-z/]*\s*[-—–]?\s*[0-9]{4}(?:\([0-9]{4}\))?)\s*"
+    r"(?:第|条款?)?\s*([0-9]+(?:\.[0-9]+)+)"
+)
+
+
+def _filter_cited(answer: str, references: list[dict]) -> list[dict]:
+    """确定性引用对账：只保留回答文本中出现的条款号对应的条文。
+
+    回答里写了 (规范号) 条款号 → 与实读条文匹配（规范号包含 +
+    条款号精确/范围覆盖，"6.4.1~6.4.5" 覆盖 6.4.3）。
+    匹配失败时保留全部（不产生空引用）。"""
+    if not references or not answer:
+        return references
+    flat = re.sub(r"[\s（）()]", "", answer)
+    pairs = [(m.group(1), m.group(2)) for m in _CITE_PAIR.finditer(flat)]
+    if not pairs:
+        return references
+
+    def _ckey(clause: str) -> tuple:
+        return tuple(int(x) if x.isdigit() else 0 for x in clause.split("."))
+
+    def _covers(rclause: str, pclause: str) -> bool:
+        if rclause == pclause or pclause in rclause:
+            return True
+        if "~" in rclause:
+            a, _, b = rclause.partition("~")
+            try:
+                return _ckey(a) <= _ckey(pclause) <= _ckey(b)
+            except Exception:
+                return False
+        return False
+
+    picked: list[dict] = []
+    for r in references:
+        spec = re.sub(r"[\s（）()]", "", r.get("spec_no") or "")
+        rclause = r.get("clause_no") or ""
+        for pspec, pclause in pairs:
+            if pspec and (pspec in spec or spec in pspec) and _covers(rclause, pclause):
+                picked.append(r)
+                break
+    return picked if picked else references
 
 
 def _describe_tool(item: dict) -> str:
@@ -88,23 +201,29 @@ def ask_question(
     cache = RetrievalCache(storage_path / "retrieval_cache.db")
     history = ConversationHistory(storage_path / "conversation_history.db")
     messages = history.get_recent(session_id, history_turns)
+    
+    # 多轮防幻觉：历史 assistant 回答截断为开头摘要。完整条文/总结留在
+    # 会话历史与引用按钮里供用户查看，但不再进入模型上下文——消除
+    # "历史里有资料可不检索直接作答"的诱因，新问题必须重新检索。
+    messages = [
+        {**m, "content": (
+            m["content"][:120] + "……（历史回答已归档；回答新问题请重新检索条文）"
+            if m["role"] == "assistant" and len(m["content"]) > 120
+            else m["content"])}
+        for m in messages
+    ]
     messages.append({"role": "user", "content": question})
 
     complete_question = is_complete_question(question)
     # 只有能独立理解的问题才查全局缓存，避免追问脱离上下文误命中。
     # 两级精确键：① 全文键（一模一样的问题）② jieba 关键词串键（句式变体）。
+    cached_entry = None
     if doc_ids is None and complete_question:
-        cached_documents = cache.get(question) or cache.get_by_keyword(question)
-    else:
-        cached_documents = []
+        cached_entry = cache.get(question) or cache.get_by_keyword(question)
 
-    # 命中且已有要点总结 → 直接秒回（零模型调用）；无总结则走导航重新生成。
-    summary = cache.get_summary(question) if cached_documents else None
-    if cached_documents and summary:
-        references = _build_references(
-            [(d.doc_name, d.pages) for d in cached_documents]
-        )
-        answer = summary
+    # 命中：要点总结 + 引用成品直接回放（零模型调用、零重建）。
+    if cached_entry and cached_entry[0]:
+        answer, references = cached_entry[0], cached_entry[1] or []
         elapsed = round(perf_counter() - started_at, 1)
         history.append_turn(session_id, question, answer, cached=True, tokens=None,
                             elapsed=elapsed, references=references)
@@ -113,12 +232,12 @@ def ask_question(
                "elapsed": elapsed, "references": references}
         return
 
-    # 未命中：流式 agentic 导航，把工具调用与答案增量实时抛给调用方。
+    # 未命中：流式 agentic 导航。
     try:
         events = client.responses(
             messages,
             doc_id=doc_ids,
-            max_turns=7,
+            max_turns=8,  # 硬上限：封顶发散（提示词是软约束，轮数是硬保证）
             # 追加到系统提示末尾：默认提示词全英文，模型会跟着说英文。
             instructions=_INSTRUCTION_ZH,
             stream=True,
@@ -158,61 +277,20 @@ def ask_question(
             part.get("text", "") for part in (last.get("content") or [])
             if isinstance(part, dict)
         )
-    # 结构化引用：检索到的 (法规, 逻辑页) → 条文定位（真实调用数据，非模型生成）。
-    references = _build_references([
-        (arguments.get("doc_name"), arguments.get("pages"))
-        for arguments in (
-            json.loads(item["arguments"])
-            for item in items
-            if item.get("type") == "function_call" and item.get("name") == "get_page_content"
-        )
-        if arguments.get("doc_name") and arguments.get("pages")
-    ])
+    # 结构化引用：从 transcript 提取（page_content 页 + structure 条文叶），去重合并。
+    # 保留全部实读条文：段落标注负责命中筛选，底部列表兜底展示，依据不丢失。
+    references = _references_from_items(items)
     history.append_turn(session_id, question, answer,
                         cached=False, tokens=tokens or None, elapsed=elapsed,
                         references=references)
 
-    # 只有完整问题的全库检索结果才写入全局缓存（条文定位 + 要点总结）。
+    # 只有完整问题的全库检索结果才写入全局缓存（要点总结 + 引用成品）。
     if doc_ids is None and complete_question:
-        cache_retrieval_paths(cache, question, {"items": items}, summary=answer)
+        cache.put(question, summary=answer,
+                  references_json=json.dumps(references, ensure_ascii=False))
 
     yield {"type": "done", "answer": answer, "cached": False,
            "tokens": tokens or None, "elapsed": elapsed, "references": references}
-
-
-def cache_retrieval_paths(
-    cache: RetrievalCache,
-    question: str,
-    response: dict,
-    summary: str | None = None,
-) -> None:
-    """缓存本轮各法规的 get_page_content 多页参数（可附带要点总结）。"""
-
-    # 只缓存实际读取过的条文页，不缓存目录浏览或最终回答。
-    page_calls = [
-        item for item in response["items"]
-        if item.get("type") == "function_call" and item.get("name") == "get_page_content"
-    ]
-
-    # 按法规名合并多次工具调用中的原始页码参数。
-    document_pages: dict[str, list[str]] = {}
-    for page_call in page_calls:
-        arguments = json.loads(page_call["arguments"])
-        document_name = arguments.get("doc_name")
-        pages = arguments.get("pages")
-        if isinstance(document_name, str) and isinstance(pages, str) and pages:
-            document_pages.setdefault(document_name, []).append(pages)
-
-    cached_documents = [
-        CachedDocument(
-            doc_name=document_name,
-            pages=",".join(pages),
-        )
-        for document_name, pages in document_pages.items()
-    ]
-    if cached_documents:
-        # 同一问题的旧定位整体替换，避免保留过期或错误的页。
-        cache.put(question, cached_documents, summary=summary)
 
 
 def main() -> None:

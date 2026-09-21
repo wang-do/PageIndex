@@ -1,13 +1,13 @@
-"""法规检索路径的 SQLite 缓存。"""
+"""法规检索结果的 SQLite 缓存：每个问题一行，存要点总结与引用成品。"""
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import unicodedata
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 
 import jieba.posseg
@@ -22,15 +22,12 @@ _KEEP_FLAG_PREFIX = "nvab"  # 保留名词/动词/形容词/区别词，虚词�
 # 缓存键数上限（LRU）：超过即按最久未使用整键淘汰；命中会自动续命。
 MAX_KEY_ENTRIES = 50
 
-# 纯疑问形式词，不参与键区分（"X有哪些"和"X"是同一意图），否则一个问法
-# 带一个不带就会错开键。userdict 里保留它们只为让 jieba 整词切出、在此整体剔除。
+# 纯疑问形式词，不参与键区分（"X有哪些"和"X"是同一意图）。
 _DROP_WORDS = {
     "有哪些", "哪些", "什么", "是多少", "是什么", "多少",
     "啥", "怎么", "怎样", "如何", "请问", "一下",
 }
 
-
-# 这个是是否缓存读入的文本
 # 出现这些词时，问题通常依赖前文，不能作为全局缓存键。
 FOLLOW_UP_MARKERS = (
     "这个", "那个", "这种", "这样", "上述", "前述", "该要求", "该规定",
@@ -49,14 +46,6 @@ QUESTION_INTENT_MARKERS = (
     "适用", "应当", "不得", "是否需要", "是多少", "有哪些", "是什么",
     "能否", "是否", "可以",
 )
-
-
-@dataclass(frozen=True)
-class CachedDocument:
-    """缓存中已定位的一部法规及其条文页范围。"""
-
-    doc_name: str
-    pages: str
 
 
 def normalize_question(question: str) -> str:
@@ -83,7 +72,7 @@ def is_complete_question(question: str) -> bool:
     has_intent = any(marker in compact for marker in QUESTION_INTENT_MARKERS)
     return has_intent and len(compact) >= 7
 
-#################################缓存第一层2 关键词命中########################
+
 _jieba_ready = False
 
 
@@ -116,151 +105,119 @@ def keyword_key(question: str) -> str | None:
     if len(words) < 2:
         return None
     return f"K1|{'|'.join(words)}"
-##############################################################################
+
 
 class RetrievalCache:
-    """以归一化问题为键，缓存法规名称和条文页范围。"""
+    """以归一化问题为键，每问题一行缓存要点总结与引用成品。
+
+    命中判定：get/get_by_keyword 返回非 None 即命中；
+    引用回放：直接返回存好的 references 成品，不做任何重建。
+    """
 
     def __init__(self, database_path: Path) -> None:
         self.database_path = database_path
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def get(self, question: str) -> list[CachedDocument]:
-        """按全文精确键查找已缓存的法规名称和条文页范围。"""
-        normalized_question = normalize_question(question)
-        if not normalized_question:
-            return []
-        return self._load(normalized_question)
+    def get(self, question: str) -> tuple[str | None, list[dict] | None] | None:
+        """按全文精确键取 (summary, references)；无缓存返回 None。"""
+        normalized = normalize_question(question)
+        if not normalized:
+            return None
+        return self._load(normalized)
 
-    def get_by_keyword(self, question: str) -> list[CachedDocument]:
-        """按关键词串键查找；含数字/抽词过少的问题返回空（自动跳过）。"""
+    def get_by_keyword(self, question: str) -> tuple[str | None, list[dict] | None] | None:
+        """按关键词串键取；含数字/抽词过少的问题返回 None（自动跳过）。"""
         keyword = keyword_key(question)
         if not keyword:
-            return []
+            return None
         return self._load(keyword)
 
-    def _load(self, key: str) -> list[CachedDocument]:
-        """按缓存键读回法规名称和条文页范围，保持写入顺序。"""
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT doc_name, pages, summary
-                FROM retrieval_cache
-                WHERE question = ?
-                ORDER BY rowid
-                """,
-                (key,),
-            ).fetchall()
-            if rows:
-                # LRU 续命：删除后按原顺序重插，rowid 自然变为最新。
-                # 不能用 UPDATE rowid = 标量子查询——一个键多行时会算出
-                # 同一个目标 rowid，第二行起必撞 UNIQUE 约束。
-                connection.execute(
-                    "DELETE FROM retrieval_cache WHERE question = ?",
-                    (key,),
-                )
-                connection.executemany(
-                    """
-                    INSERT INTO retrieval_cache(question, doc_name, pages, summary)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    [
-                        (key, row["doc_name"], row["pages"], row["summary"])
-                        for row in rows
-                    ],
-                )
-        return [
-            CachedDocument(doc_name=row["doc_name"], pages=row["pages"])
-            for row in rows
-        ]
-
-    def get_summary(self, question: str) -> str | None:
-        """返回该问题已缓存的要点总结（任一行非空即取）。"""
-        normalized_question = normalize_question(question)
-        if not normalized_question:
-            return None
+    def _load(self, key: str) -> tuple[str | None, list[dict] | None] | None:
+        """读一个键的 (summary, references) 并做 LRU 续命。"""
         with self._connect() as connection:
             row = connection.execute(
                 """
-                SELECT summary
+                SELECT summary, references_json
                 FROM retrieval_cache
-                WHERE question = ? AND summary IS NOT NULL
-                LIMIT 1
+                WHERE question = ?
                 """,
-                (normalized_question,),
+                (key,),
             ).fetchone()
-        return row["summary"] if row else None
+            if row is None:
+                return None
+            # LRU 续命：删除后重插，rowid 变为最新。
+            connection.execute(
+                "DELETE FROM retrieval_cache WHERE question = ?", (key,))
+            connection.execute(
+                """
+                INSERT INTO retrieval_cache(question, summary, references_json)
+                VALUES (?, ?, ?)
+                """,
+                (key, row["summary"], row["references_json"]),
+            )
+        try:
+            references = json.loads(row["references_json"]) if row["references_json"] else None
+        except (TypeError, ValueError):
+            references = None
+        return row["summary"], references
 
-    def put(self, question: str, documents: list[CachedDocument],
-            summary: str | None = None) -> None:
+    def put(self, question: str, summary: str | None = None,
+            references_json: str | None = None) -> None:
         """双写全文键和关键词串键（关键词键在含数字等问题上自动跳过）。"""
-        if not documents:
-            return
         normalized_question = normalize_question(question)
         if not normalized_question:
             return
-        self._store(normalized_question, documents, summary=summary)
+        self._store(normalized_question, summary, references_json)
         keyword = keyword_key(question)
         if keyword:
-            self._store(keyword, documents, summary=summary)
+            self._store(keyword, summary, references_json)
 
-    def _store(self, key: str, documents: list[CachedDocument],
-               summary: str | None = None) -> None:
-        """整体替换一个键对应的全部法规和条文页范围，并维持 LRU 上限。"""
-        # 一个问题可能对应多部法规，每部法规保存一个多页范围字符串。
-        unique_documents = list(dict.fromkeys(documents))
+    def _store(self, key: str, summary: str | None,
+               references_json: str | None) -> None:
+        """整体替换一个键的内容，并维持 LRU 上限。"""
         with self._connect() as connection:
             connection.execute(
-                "DELETE FROM retrieval_cache WHERE question = ?",
-                (key,),
-            )
-            connection.executemany(
+                "DELETE FROM retrieval_cache WHERE question = ?", (key,))
+            connection.execute(
                 """
-                INSERT INTO retrieval_cache(question, doc_name, pages, summary)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO retrieval_cache(question, summary, references_json)
+                VALUES (?, ?, ?)
                 """,
-                [
-                    (key, document.doc_name, document.pages, summary)
-                    for document in unique_documents
-                ],
+                (key, summary, references_json),
             )
             self._evict_oldest(connection)
 
     def _evict_oldest(self, connection: sqlite3.Connection) -> None:
-        """键数超过上限时，按 rowid 从老到新整键淘汰（LRU 语义，
+        """键数超过上限时，按 rowid 从老到新淘汰（LRU 语义，
         命中的键已在 _load 中续到最新）。"""
-        distinct_keys = connection.execute(
-            """
-            SELECT question, MIN(rowid) AS oldest
-            FROM retrieval_cache
-            GROUP BY question
-            ORDER BY oldest
-            """
+        keys = connection.execute(
+            "SELECT question FROM retrieval_cache ORDER BY rowid"
         ).fetchall()
-        overflow = len(distinct_keys) - MAX_KEY_ENTRIES
+        overflow = len(keys) - MAX_KEY_ENTRIES
         if overflow <= 0:
             return
-        oldest_keys = [row["question"] for row in distinct_keys[:overflow]]
         connection.executemany(
             "DELETE FROM retrieval_cache WHERE question = ?",
-            [(key,) for key in oldest_keys],
+            [(row["question"],) for row in keys[:overflow]],
         )
 
     def _initialize(self) -> None:
-        """创建全新的多法规、多页缓存表。"""
+        """创建单行缓存表；旧的多行结构（含 doc_name 列）自动重建。"""
         with self._connect() as connection:
+            columns = [row["name"] for row in connection.execute(
+                "PRAGMA table_info(retrieval_cache)")]
+            if columns and "doc_name" in columns:
+                connection.execute("DROP TABLE retrieval_cache")
             connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS retrieval_cache (
-                question TEXT NOT NULL,
-                doc_name TEXT NOT NULL,
-                pages TEXT NOT NULL,
-                summary TEXT,
-                PRIMARY KEY (question, doc_name)
+                """
+                CREATE TABLE IF NOT EXISTS retrieval_cache (
+                    question TEXT PRIMARY KEY,
+                    summary TEXT,
+                    references_json TEXT
+                )
+                """
             )
-            """
-        )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

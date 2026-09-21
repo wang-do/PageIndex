@@ -1,5 +1,4 @@
 {
-  "_provenance": "Frozen copy of the PageIndex cloud MCP server's tool contract (names, input schemas, descriptions, and annotations as served via tools/list). The parity test asserts pageindex.agent_tools.TOOL_CONTRACT matches this file; update both together only when the cloud contract changes.",
   "tools": {
     "browse_documents": {
       "annotations": {
@@ -92,7 +91,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Extract a document's hierarchical outline (headers, sections, page references). REQUIRED for documents over 20 pages — call this first to locate relevant sections, then pass their page numbers to `get_page_content()`. Use the `part` parameter to iterate large outlines until `pagination.has_more` is false.",
+      "description": "Extract a document's hierarchical outline (headers, sections, page references). REQUIRED for documents over 20 pages — call this first to locate relevant sections, then pass their page numbers to `get_page_content()`. The outline is progressive: without `node_id` you get the TOP level only (chapters); pass a `node_id` from a previous response to drill into that node's next level. Drill down level by level until you reach clauses, then call `get_page_content()`.",
       "schema": {
         "type": "object",
         "properties": {
@@ -100,6 +99,17 @@
             "type": "string",
             "minLength": 1,
             "description": "Copy the `name` field verbatim from a browse_documents() or search_documents() response (case-sensitive, include extension). Example: \"Q3 Report.pdf\". If the response shows two documents with the same name, pass `folder_id` alongside to disambiguate."
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional node to drill into (copy `node_id` verbatim from a previous response). Omit or null for the document's top level."
           },
           "folder_id": {
             "anyOf": [

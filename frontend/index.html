@@ -15,6 +15,8 @@
     .brand-mark { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; background: #202123; color: #fff; font-size: 12px; }
     #new-session { width: 100%; padding: 10px 12px; text-align: left; background: #fff; border: 1px solid #dedede; color: #343541; box-shadow: 0 1px 2px #00000008; }
     #new-session:hover { background: #f0f0f0; }
+    #kb-entry { width: 100%; margin-top: 8px; padding: 10px 12px; text-align: left; background: #fff; border: 1px solid #dedede; color: #343541; box-shadow: 0 1px 2px #00000008; }
+    #kb-entry:hover { background: #f0f0f0; }
     .section-label { margin: 25px 10px 8px; color: #8a8a8a; font-size: 12px; }
     #session-list { display: flex; flex-direction: column; gap: 2px; }
     .session-row { display: flex; align-items: center; border-radius: 6px; }
@@ -40,9 +42,6 @@
     .assistant pre code { padding: 0; background: transparent; }
     .assistant blockquote { margin: 0 0 10px; padding: 2px 12px; border-left: 3px solid #e0e0e0; color: #666; }
     .meta { margin-top: 8px; font-size: 14px; color: #b8b8b8; }
-    .refs { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
-    .ref-btn { font-size: 12px; padding: 3px 10px; border: 1px solid #d9d9d9; border-radius: 12px; background: #f7f7f7; color: #555; cursor: pointer; }
-    .ref-btn:hover { background: #ebebeb; }
     .steps { margin: 0 0 10px; padding: 6px 10px 6px 12px; border-left: 3px solid #e5e5e5; background: #fafafa; border-radius: 6px; font-size: 12px; color: #8a8a8a; }
     .steps summary { cursor: pointer; }
     .steps li { margin: 3px 0 3px 6px; }
@@ -52,7 +51,7 @@
     .waiting { display: flex; align-items: center; gap: 9px; color: #777; font-size: 13px; }
     .spinner { width: 14px; height: 14px; border: 2px solid #ddd; border-top-color: #555; border-radius: 50%; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .composer-wrap { position: fixed; right: 0; bottom: 0; left: 252px; padding: 20px 24px 24px; background: linear-gradient(#fff0, #fff 30%); }
+    .composer-wrap { position: fixed; right: var(--ref-w); bottom: 0; left: 252px; padding: 20px 24px 24px; background: linear-gradient(#fff0, #fff 30%); }
     form { width: min(820px, 100%); margin: 0 auto; display: flex; align-items: flex-end; gap: 10px; padding: 10px 10px 10px 16px; border: 1px solid #d9d9d9; border-radius: 14px; background: #fff; box-shadow: 0 4px 22px #0000000d; }
     textarea { min-height: 28px; max-height: 180px; flex: 1; resize: vertical; padding: 5px 0; border: 0; outline: none; font: inherit; line-height: 1.45; }
     textarea::placeholder { color: #999; }
@@ -76,7 +75,62 @@
     .dialog-actions button { padding: 8px 15px; background: #f3f3f3; color: #333; }
     .dialog-actions #dialog-confirm { background: #202123; color: #fff; }
     .dialog-actions #dialog-confirm.danger { background: #bb2f2f; }
+    /* 右侧原文面板：打开时通过 body.ref-open 的 --ref-w 把聊天区和输入框向左收窄 */
+    :root { --ref-w: 0px; }
+    body.ref-open { --ref-w: clamp(400px, 44vw, 780px); }
+    .main { margin-right: var(--ref-w); transition: margin-right .2s ease; }
+    .composer-wrap { transition: right .2s ease; }
+    .reference-panel { position: fixed; z-index: 15; top: 0; right: 0; bottom: 0; width: var(--ref-w); display: flex; flex-direction: column; overflow: hidden; background: #222; border-left: 1px solid #e0e0e0; box-shadow: -6px 0 24px #00000022; }
+    .reference-panel[hidden] { display: none; }
+    .reference-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #333; color: #fff; font-size: 13px; flex: none; }
+    .reference-toolbar button { padding: 4px 10px; background: #555; color: #fff; }
+    #reference-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .reference-content { flex: 1; overflow: hidden; }
+    .reference-content { display: flex; align-items: flex-start; justify-content: center; overflow: auto; }
+    .reference-content img { display: block; width: 100%; height: auto; border: 0; background: #fff; }
+    .reference-toolbar a { color: #fff; font-size: 12px; text-decoration: underline; margin-right: 10px; white-space: nowrap; }
+    @media (max-width: 1100px) { body.ref-open { --ref-w: 0px; } .reference-panel { width: min(94vw, 640px); } }
     @media (max-width: 700px) { .sidebar { width: 62px; padding: 18px 8px; } .brand { justify-content: center; padding: 5px 0 24px; } .brand span, .section-label, #session-list, #new-session { display: none; } .main { margin-left: 62px; } .composer-wrap { left: 62px; padding: 14px 12px 18px; } header { padding: 0 16px; } .conversation { padding: 24px 16px 130px; } .message { max-width: 94%; } .hint { display: none; } }
+    .para-cites { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: 8px; font-size: 12px; color: #4a5568; }
+    .refs { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 6px; font-size: 12px; color: #4a5568; }
+    .cite-chip { display: inline-block; padding: 2px 9px; color: #1a66cc; background: #eef4ff; border: 1px solid #c9ddf5; border-radius: 10px; cursor: pointer; }
+    .cite-chip:hover { background: #dbe9fb; text-decoration: none; }
+    .cite-label { color: #4a5568; background: #f2f2f2; border-color: #e0e0e0; cursor: default; }
+    .para-cites a { color: #1a66cc; text-decoration: none; cursor: pointer; }
+    .para-cites a:hover { text-decoration: underline; }
+    .kb-view { position: fixed; inset: 0 0 0 252px; z-index: 30; background: #f7f7f7; display: flex; flex-direction: column; }
+    .kb-view[hidden] { display: none; }
+    .kb-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: #fff; border-bottom: 1px solid #d9d9d9; }
+    .kb-list-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .kb-title { font-size: 16px; font-weight: 600; }
+    .kb-list-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-content: start; }
+    .kb-card { background: #fff; border: 1px solid #d9d9d9; border-radius: 10px; padding: 14px 16px; cursor: pointer; }
+    .kb-card:hover { border-color: #1a66cc; box-shadow: 0 2px 10px rgba(26,102,204,.12); }
+    .kb-card-name { font-weight: 600; margin-bottom: 4px; }
+    .kb-card-sub { color: #1a66cc; font-size: 13px; margin-bottom: 6px; }
+    .kb-card-meta { color: #888; font-size: 12px; }
+    .kb-detail-view { position: absolute; inset: 0; background: #f7f7f7; display: flex; flex-direction: column; z-index: 2; }
+    .kb-detail-view[hidden] { display: none; }
+    .kb-detail-toolbar { display: flex; align-items: center; gap: 12px; padding: 14px 20px; background: #fff; border-bottom: 1px solid #d9d9d9; font-weight: 600; }
+    .kb-detail-body { flex: 1; display: flex; overflow: hidden; }
+    .kb-detail-info { width: 300px; flex: none; overflow-y: auto; padding: 18px; background: #fff; border-right: 1px solid #e5e5e5; }
+    .kb-info-row { margin-bottom: 10px; font-size: 13px; }
+    .kb-info-row span { display: block; color: #999; font-size: 11px; margin-bottom: 2px; }
+    .kb-info-desc { margin-top: 14px; font-size: 13px; line-height: 1.7; color: #444; }
+    .kb-detail-preview-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .kb-pager { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 8px; background: #fff; border-bottom: 1px solid #eee; font-size: 13px; }
+    .kb-pager button { padding: 2px 12px; font-size: 12px; }
+    .kb-pager button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .kb-detail-preview { flex: 1; overflow: auto; display: flex; justify-content: center; padding: 16px; }
+    .kb-detail-preview img { max-width: 100%; height: auto; box-shadow: 0 2px 14px rgba(0,0,0,.15); }
+    .kb-tools { display: flex; align-items: center; gap: 14px; padding: 10px 20px; background: #fff; border-bottom: 1px solid #eee; }
+    .kb-select-all { display: flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+    #kb-search { flex: 0 1 260px; padding: 6px 10px; border: 1px solid #d9d9d9; border-radius: 8px; font-size: 13px; }
+    .kb-selected-count { color: #888; font-size: 12px; white-space: nowrap; }
+    .kb-card { display: flex; align-items: flex-start; gap: 10px; }
+    .kb-card input[type="checkbox"] { margin-top: 3px; cursor: pointer; }
+    .kb-card-body { flex: 1; }
+    .kb-status { padding: 30px; text-align: center; color: #888; }
   </style>
 </head>
 <body>
@@ -84,6 +138,7 @@
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">法</div><span>法规问答</span></div>
       <button id="new-session" type="button">＋&nbsp; 新建会话</button>
+<button id="kb-entry" type="button">📚&nbsp; 知识库</button>
       <div class="section-label">会话</div>
       <div id="session-list"></div>
     </aside>
@@ -117,6 +172,52 @@
       </div>
     </section>
   </div>
+  <aside id="reference-panel" class="reference-panel" hidden aria-label="查看法规原文">
+    <div class="reference-toolbar">
+      <span id="reference-title">法规原文</span>
+      <span class="pager">
+        <button id="page-prev" type="button" title="上一页">◀</button>
+        <span id="page-indicator">第 - 页</span>
+        <button id="page-next" type="button" title="下一页">▶</button>
+      </span>
+      <span><a id="reference-open-tab" href="#" target="_blank" rel="noopener">在新标签页打开</a><button id="reference-close" type="button">关闭</button></span>
+    </div>
+    <div class="reference-content"><img id="reference-frame" title="法规原文页" alt="法规原文页"></div>
+  </aside>
+  <div id="kb-view" class="kb-view" hidden>
+    <div id="kb-list-view" class="kb-list-view">
+      <div class="kb-header">
+        <span class="kb-title">知识库（46 本规范）</span>
+              </div>
+      <div class="kb-tools">
+        <label class="kb-select-all"><input type="checkbox" id="kb-select-all" checked> 全选</label>
+        <input type="search" id="kb-search" placeholder="搜索规范名称或编号…">
+        <span id="kb-selected-count" class="kb-selected-count"></span>
+      </div>
+      <div id="kb-list-body" class="kb-list-body"><div class="kb-status">加载中…</div></div>
+    </div>
+    <div id="kb-detail-view" class="kb-detail-view" hidden>
+      <div class="kb-detail-toolbar">
+        <button id="kb-back" type="button">&lt; 返回</button>
+        <span id="kb-detail-title">知识库详情</span>
+      </div>
+      <div class="kb-detail-body">
+        <div id="kb-detail-info" class="kb-detail-info"></div>
+        <div class="kb-detail-preview-wrap">
+          <div class="kb-pager">
+            <button id="kb-page-prev" type="button" title="上一页">◀</button>
+            <span id="kb-page-indicator">第 - 页</span>
+            <button id="kb-page-next" type="button" title="下一页">▶</button>
+          </div>
+          <div class="kb-detail-preview">
+            <div id="kb-preview-status" class="kb-status"></div>
+            <img id="kb-preview-img" alt="PDF 页预览" hidden>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="marked.min.js"></script>
   <script>
     let sessionId = null;
@@ -131,6 +232,13 @@
     const dialogCopy = document.querySelector('#dialog-copy');
     const renameInput = document.querySelector('#rename-input');
     const dialogConfirm = document.querySelector('#dialog-confirm');
+    const referencePanel = document.querySelector('#reference-panel');
+    const referenceTitle = document.querySelector('#reference-title');
+    let referenceFrame = document.querySelector('#reference-frame');
+    const referenceOpenTab = document.querySelector('#reference-open-tab');
+    const pagePrev = document.querySelector('#page-prev');
+    const pageNext = document.querySelector('#page-next');
+    const pageIndicator = document.querySelector('#page-indicator');
     let selectedSession = null;
     let dialogAction = null;
 
@@ -143,23 +251,164 @@
       return marked.parse(String(text), { breaks: true });
     }
 
-    // 引用按钮区：每条引用一个胶囊按钮，点击时把该条引用 JSON 传出
-    // （PDF 跳转/画红框的挂载点，后续在这里接入）。
-    function appendRefButtons(node, references) {
+    // 引用按钮区：每条引用一个胶囊按钮，点击后在右侧面板打开原始 PDF
+    // 并通过 #page=N 定位到引用页（暂不画红框，bbox 数据先保留待后续使用）。
+    function closeReferenceViewer() {
+      referencePanel.hidden = true;
+      document.body.classList.remove('ref-open');
+      referenceFrame.removeAttribute('src');
+    }
+
+    // 翻页状态：当前浏览的法规与页码。
+    let pagerState = { spec: '', page: 0, total: 0 };
+
+    async function loadReferencePage(specNo, pagePdf, ref) {
+      const params = new URLSearchParams({ spec_no: specNo, page_pdf: String(pagePdf) });
+      if (ref && Array.isArray(ref.bbox) && ref.bbox.length === 4 && ref.page_pdf === pagePdf) {
+        params.set('bbox', JSON.stringify(ref.bbox));
+        if (ref.img_w) { params.set('img_w', String(ref.img_w)); params.set('img_h', String(ref.img_h)); }
+      }
+      const resp = await fetch(`/api/reference-image?${params.toString()}`);
+      if (!resp.ok) throw new Error(`第${pagePdf}页加载失败`);
+      const total = parseInt(resp.headers.get('X-Page-Count') || '0', 10);
+      if (total) pagerState.total = total;
+      pagerState.spec = specNo;
+      pagerState.page = pagePdf;
+      const blob = await resp.blob();
+      const newImg = referenceFrame.cloneNode();
+      newImg.src = URL.createObjectURL(blob);
+      referenceFrame.replaceWith(newImg);
+      referenceFrame = newImg;
+      // 页码显示 + 翻页按钮可用性
+      pageIndicator.textContent = `第 ${pagePdf} / ${pagerState.total || '?'} 页`;
+      pagePrev.disabled = pagePdf <= 1;
+      pageNext.disabled = pagerState.total ? pagePdf >= pagerState.total : false;
+      referenceOpenTab.href = `/api/documents/${encodeURIComponent(specNo)}.pdf#page=${pagePdf}`;
+    }
+
+    function showReference(ref) {
+      const specNo = ref.spec_no || ref.doc_name || '';
+      if (!specNo || ref.page_pdf == null) return;
+      referenceTitle.textContent = `${ref.spec_name || specNo} · ${ref.clause_no || ''}`;
+      referencePanel.hidden = false;
+      document.body.classList.add('ref-open');
+      loadReferencePage(specNo, ref.page_pdf, ref).catch(err => {
+        console.error(err);
+        pageIndicator.textContent = '加载失败';
+      });
+    }
+
+    pagePrev.addEventListener('click', () => {
+      if (pagerState.page > 1) loadReferencePage(pagerState.spec, pagerState.page - 1).catch(console.error);
+    });
+    pageNext.addEventListener('click', () => {
+      if (!pagerState.total || pagerState.page < pagerState.total) {
+        loadReferencePage(pagerState.spec, pagerState.page + 1).catch(console.error);
+      }
+    });
+
+
+    document.querySelector('#reference-close').addEventListener('click', closeReferenceViewer);
+
+    // ── 底部引用列表：只显示段落标注未命中的条文（已出现的不再重复），
+    //    样式与段落依据胶囊一致。
+    function appendRefButtons(node, references, citedKeys) {
       if (!Array.isArray(references) || references.length === 0) return;
+      // 显示规则（三选一）：
+      // ① 段落标注已出现的 → 不重复（段落里已有胶囊）
+      // ② leaf（下钻路过的叶子）且未命中 → 不显示（纯检索路径）
+      // ③ page（读过原文的页）且未命中 → 底部补充显示
+      const rest = references.filter(ref => {
+        const key = (ref.spec_no || '') + (ref.clause_no || '');
+        if (citedKeys && citedKeys.has(key)) return false;
+        return (ref.source || 'page') === 'page';
+      });
+      if (!rest.length) return;
       const box = document.createElement('div');
       box.className = 'refs';
-      for (const ref of references) {
-        const btn = document.createElement('button');
-        btn.className = 'ref-btn';
-        btn.textContent = `${ref.spec_name || ref.doc_name || ''} · ${ref.clause_no || ''} · 第${ref.page_pdf ?? '?'}页`;
-        btn.addEventListener('click', () => {
-          // TODO: PDF 跳转/画红框挂载点——此处拿到该条引用的完整 JSON
-          console.log('[引用] PDF 定位数据：', JSON.stringify(ref));
-        });
-        box.appendChild(btn);
-      }
+      rest.forEach((ref, i) => {
+        const a = document.createElement('a');
+        a.className = 'cite-chip';
+        a.textContent = (i === 0 ? '▸依据 ' : '') + `${ref.spec_no || ''} ${ref.clause_no || ''}`;
+        a.addEventListener('click', () => showReference(ref));
+        box.appendChild(a);
+      })
       node.appendChild(box);
+    }
+
+    // ── 段落级依据标注：扫描每段中的"规范号 + 条款号"，匹配引用后在
+    //    段落末尾追加可点击的依据标签。
+    function normSpec(s) { return (s || '').replace(/[\s（）()]/g, ''); }
+    function ckey(c) { return (c || '').split('.').map(x => parseInt(x, 10) || 0); }
+    function coversClause(range, clause) {
+      if (range === clause || range.includes(clause)) return true;
+      if (range.includes('~')) {
+        const [a, b] = range.split('~');
+        const ka = ckey(a), kc = ckey(clause), kb = ckey(b);
+        return ka <= kc && kc <= kb;
+      }
+      return false;
+    }
+    const CITE_RE = /([A-Z]{2,}[0-9A-Za-z/]*\s*[-—–]?\s*\d{4}(?:\(\d{4}\))?)\s*(?:第|条款?)?\s*(\d+(?:\.\d+)+)/g;
+
+    function annotateParagraphs(container, references) {
+      if (!references || !references.length || !container) return null;
+      let annotated = false;
+      const citedKeys = new Set();
+      container.querySelectorAll('p, li').forEach(block => {
+        if (block.querySelector('.para-cites')) return;
+        const text = block.textContent || '';
+        const seen = new Set();
+        const hits = [];
+        let m;
+        CITE_RE.lastIndex = 0;
+        while ((m = CITE_RE.exec(text)) !== null) {
+          const pspec = normSpec(m[1]), pclause = m[2];
+          // 节级引用（两级条款号如 3.4、7.1）不标注——只有具体条文（三级+）才出依据
+          if (pclause.split('.').length < 3) continue;
+          references.forEach(ref => {
+            const key = (ref.spec_no || '') + (ref.clause_no || '');
+            if (seen.has(key)) return;
+            const spec = normSpec(ref.spec_no);
+            if (pspec && (pspec.includes(spec) || spec.includes(pspec))
+                && coversClause(ref.clause_no || '', pclause)) {
+              seen.add(key);
+              citedKeys.add(key);
+              hits.push(ref);
+            }
+          });
+        }
+        if (!hits.length) return;
+        annotated = true;
+        const span = document.createElement('span');
+        span.className = 'para-cites';
+
+        hits.forEach((ref, i) => {
+          const a = document.createElement('a');
+          a.className = 'cite-chip';
+          a.textContent = (i === 0 ? '▸依据 ' : '') + `${ref.spec_no || ''} ${ref.clause_no || ''}`;
+          a.addEventListener('click', () => showReference(ref));
+          span.appendChild(a);
+        });
+        block.appendChild(span);
+      });
+      // 兜底：所有段落都没匹配上时，末尾追加完整依据标签，保证引用可见。
+      if (!annotated) {
+        const last = [...container.querySelectorAll('p, li')].pop();
+        const span = document.createElement('span');
+        span.className = 'para-cites';
+
+        references.forEach(ref => {
+          const a = document.createElement('a');
+          a.className = 'cite-chip';
+          a.textContent = `${ref.spec_no || ''} ${ref.clause_no || ''}`;
+          citedKeys.add((ref.spec_no || '') + (ref.clause_no || ''));
+          a.addEventListener('click', () => showReference(ref));
+          span.appendChild(a);
+        });
+        (last || container).appendChild(span);
+      }
+      return citedKeys;
     }
 
     function addMessage(role, text, meta) {
@@ -173,7 +422,8 @@
         node.textContent = text;
       }
       if (meta) {
-        appendRefButtons(node, meta.references);
+        const citedKeys = annotateParagraphs(node, meta.references);
+        appendRefButtons(node, meta.references, citedKeys);
         const parts = [meta.cached ? '命中缓存' : '未命中缓存'];
         if (meta.tokens != null) parts.push(`token：${meta.tokens}`);
         parts.push(`${meta.elapsed}s`);
@@ -235,6 +485,7 @@
     }
 
     function enterNewSession() {
+      kbView.hidden = true;  // 新建会话 → 退出知识库视图
       // 只做界面跳转，不创建会话；发出第一个问题后才真正创建并录入左侧。
       sessionId = null;
       conversationTitle.textContent = '新会话';
@@ -243,6 +494,7 @@
     }
 
     async function selectSession(id, title) {
+      kbView.hidden = true;  // 点击左侧会话 → 退出知识库视图
       sessionId = id;
       conversationTitle.textContent = title;
       const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/messages`);
@@ -369,6 +621,7 @@
       if (event.key === 'Escape') {
         hideSessionMenu();
         hideDialog();
+        closeReferenceViewer();
       }
       if (event.key === 'Enter' && !dialogBackdrop.hidden && dialogAction === 'rename') {
         dialogConfirm.click();
@@ -433,7 +686,7 @@
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: requestSessionId, question: text })
+          body: JSON.stringify({ session_id: requestSessionId, question: text, doc_ids: kbActiveDocIds() })
         });
         if (!response.ok || !response.body) {
           const data = await readResponse(response);
@@ -482,6 +735,8 @@
             } else if (event.type === 'done') {
               answerText = event.answer;
               body.innerHTML = renderMarkdown(answerText);
+              const citedKeys = annotateParagraphs(body, event.references);
+              appendRefButtons(body, event.references, citedKeys);
               finalMeta = event;
             } else if (event.type === 'error') {
               throw new Error(friendlyError(event.detail));
@@ -489,7 +744,6 @@
           }
         }
         if (finalMeta) {
-          appendRefButtons(node, finalMeta.references);
           appendAnswerMeta(node, finalMeta);
           conversationTitle.textContent = finalMeta.title;
           const activeTitle = sessionList.querySelector('.session-row.active .session-open');
@@ -527,6 +781,160 @@
       question.focus();
     }
 
+    // ── 知识库浏览：入口 → 列表 → 详情（左信息右预览，覆盖式）。
+    const kbView = document.querySelector('#kb-view');
+    const kbDetailView = document.querySelector('#kb-detail-view');
+    const kbListBody = document.querySelector('#kb-list-body');
+    // 知识库选择状态：取消勾选的 doc_id 存 localStorage（空=全选默认）。
+    const KB_DESELECTED_KEY = 'kb_deselected';
+    let kbAllIds = [];
+    const kbDeselected = () => new Set(JSON.parse(localStorage.getItem(KB_DESELECTED_KEY) || '[]'));
+    const kbSetDeselected = (set) => localStorage.setItem(KB_DESELECTED_KEY, JSON.stringify([...set]));
+    const kbSearchKeyword = () => (document.querySelector('#kb-search').value || '').trim().toLowerCase();
+
+    document.querySelector('#kb-entry').addEventListener('click', openKnowledgeBase);
+    document.querySelector('#kb-back').addEventListener('click', () => { kbDetailView.hidden = true; });
+
+    async function openKnowledgeBase() {
+      kbView.hidden = false;
+      kbDetailView.hidden = true;
+      kbListBody.innerHTML = '<div class="kb-status">加载中…</div>';
+      try {
+        const resp = await fetch('/api/knowledge-base');
+        if (!resp.ok) throw new Error('加载失败');
+        const items = await resp.json();
+        if (!items.length) { kbListBody.innerHTML = '<div class="kb-status">知识库为空</div>'; return; }
+        kbAllIds = items.map(item => item.doc_id);
+        kbListBody.innerHTML = '';
+        items.forEach(item => {
+          const card = document.createElement('div');
+          card.className = 'kb-card';
+          const box = document.createElement('input');
+          box.type = 'checkbox';
+          box.checked = !kbDeselected().has(item.doc_id);
+          box.addEventListener('click', e => e.stopPropagation());
+          box.addEventListener('change', () => {
+            const deselected = kbDeselected();
+            if (box.checked) deselected.delete(item.doc_id);
+            else deselected.add(item.doc_id);
+            kbSetDeselected(deselected);
+            updateKbSelectedCount();
+          });
+          const bodyDiv = document.createElement('div');
+          bodyDiv.className = 'kb-card-body';
+          const name = document.createElement('div');
+          name.className = 'kb-card-name';
+          name.textContent = item.name || '';
+          const sub = document.createElement('div');
+          sub.className = 'kb-card-sub';
+          sub.textContent = item.spec_name || '';
+          const meta = document.createElement('div');
+          meta.className = 'kb-card-meta';
+          meta.textContent = item.has_pdf ? (item.page_count + ' 页 · PDF 可预览') : '无 PDF 预览';
+          bodyDiv.append(name, sub, meta);
+          card.append(box, bodyDiv);
+          card.dataset.searchable = ((item.name || '') + ' ' + (item.spec_name || '')).toLowerCase();
+          card.addEventListener('click', () => openKbDetail(item));
+          kbListBody.appendChild(card);
+        });
+        updateKbSelectedCount();
+      } catch (err) {
+        kbListBody.innerHTML = '';
+        const status = document.createElement('div');
+        status.className = 'kb-status';
+        status.textContent = '加载失败：' + err.message;
+        const retry = document.createElement('button');
+        retry.textContent = '重试';
+        retry.addEventListener('click', openKnowledgeBase);
+        status.appendChild(document.createElement('br'));
+        status.appendChild(retry);
+        kbListBody.appendChild(status);
+      }
+    }
+
+    function updateKbSelectedCount() {
+      const el = document.querySelector('#kb-selected-count');
+      if (el) el.textContent = `已选 ${kbAllIds.length - kbDeselected().size} / ${kbAllIds.length} 本`;
+    }
+
+    document.querySelector('#kb-select-all').addEventListener('change', e => {
+      const checked = e.target.checked;
+      document.querySelectorAll('#kb-list-body input[type=checkbox]').forEach(box => { box.checked = checked; });
+      kbSetDeselected(checked ? new Set() : new Set(kbAllIds));
+      updateKbSelectedCount();
+    });
+    document.querySelector('#kb-search').addEventListener('input', e => {
+      const kw = e.target.value.trim().toLowerCase();
+      kbListBody.querySelectorAll('.kb-card').forEach(card => {
+        card.style.display = (card.dataset.searchable || '').includes(kw) ? '' : 'none';
+      });
+    });
+
+    function kbActiveDocIds() {
+      // 全选（无取消勾选）→ null（不限定，性能最优）；否则返回选中 id 数组。
+      const deselected = kbDeselected();
+      if (!deselected.size) return null;
+      const ids = kbAllIds.filter(id => !deselected.has(id));
+      return ids.length ? ids : null;
+    }
+
+    async function openKbDetail(item) {
+      kbDetailView.hidden = false;
+      document.querySelector('#kb-detail-title').textContent =
+        (item.name || '') + ' ' + (item.spec_name || '');
+      const info = document.querySelector('#kb-detail-info');
+      const rows = [['规范编号', item.spec_no], ['规范名称', item.spec_name],
+                    ['状态', item.status], ['实施日期', item.implement_date],
+                    ['页数', item.page_count]];
+      info.innerHTML = rows.map(([k, v]) =>
+        '<div class="kb-info-row"><span>' + k + '</span>' + (v || '—') + '</div>').join('')
+        + '<div class="kb-info-desc">' + (item.description || '暂无简介') + '</div>';
+      if (!item.has_pdf) {
+        kbPager = { docId: '', page: 0, total: 0 };
+        const img = document.querySelector('#kb-preview-img');
+        const status = document.querySelector('#kb-preview-status');
+        img.hidden = true;
+        status.hidden = false;
+        status.textContent = '该知识库无 PDF 可预览';
+        document.querySelector('#kb-page-indicator').textContent = '无预览';
+        document.querySelector('#kb-page-prev').disabled = true;
+        document.querySelector('#kb-page-next').disabled = true;
+        return;
+      }
+      await loadKbPage(item.doc_id, 1);
+    }
+
+    let kbPager = { docId: '', page: 0, total: 0 };
+
+    async function loadKbPage(docId, page) {
+      const img = document.querySelector('#kb-preview-img');
+      const status = document.querySelector('#kb-preview-status');
+      status.hidden = false;
+      status.textContent = '预览加载中…';
+      try {
+        const resp = await fetch('/api/knowledge-base/' + docId + '/first-page?page=' + page);
+        if (!resp.ok) throw new Error('预览加载失败');
+        const total = parseInt(resp.headers.get('X-Page-Count') || '0', 10);
+        kbPager = { docId, page, total: total || kbPager.total };
+        const blob = await resp.blob();
+        img.src = URL.createObjectURL(blob);
+        img.hidden = false;
+        status.hidden = true;
+        document.querySelector('#kb-page-indicator').textContent = '第 ' + page + ' / ' + (total || '?') + ' 页';
+        document.querySelector('#kb-page-prev').disabled = page <= 1;
+        document.querySelector('#kb-page-next').disabled = total ? page >= total : false;
+      } catch (err) {
+        status.textContent = '预览加载失败';
+      }
+    }
+
+    document.querySelector('#kb-page-prev').addEventListener('click', () => {
+      if (kbPager.page > 1) loadKbPage(kbPager.docId, kbPager.page - 1);
+    });
+    document.querySelector('#kb-page-next').addEventListener('click', () => {
+      if (!kbPager.total || kbPager.page < kbPager.total) loadKbPage(kbPager.docId, kbPager.page + 1);
+    });
+
     initialize().catch((error) => addMessage('error', error.message));
 
     // 把后端报错翻译成用户能看懂的话（匹配不到就原样显示）。
@@ -536,6 +944,15 @@
       const text = String(detail || '');
       if (/insufficient balance|余额不足/i.test(text)) {
         return 'token余额不足，请前往 DeepSeek 平台充值后重试';
+      }
+      if (/503|service[_ ]unavailable|Service is too busy|too busy/i.test(text)) {
+        return 'LLM 服务器繁忙，请稍后再试';
+      }
+      if (/timeout|timed out/i.test(text)) {
+        return 'LLM 请求超时，请稍后再试';
+      }
+      if (/rate limit|429/i.test(text)) {
+        return 'LLM 请求频率超限，请稍后再试';
       }
       return text;
     }
@@ -549,5 +966,6 @@
       }
     }
   </script>
+
 </body>
 </html>

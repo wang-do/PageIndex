@@ -427,10 +427,104 @@ def _translate_run_error(exc, max_turns, lane, client=None) -> PageIndexAPIError
     return _model_backend_error(exc, lane, client)
 
 
+def _agentic_context_filter(data):
+    """agentic 导航的上下文瘦身（RunConfig.call_model_input_filter 钩子）。
+
+    只修剪 browse_documents 的旧输出——它是单问最大的固定工具结果（46 本
+    法规列表 ≈1.7 万字符），且模型选中法规后不再需要清单。structure 的
+    各层结果保留（模型层间移动需要参照，省它会导致反复重钻）；
+    get_page_content（条文原文）保留——回答的依据。
+    占位符中附上模型已选定的法规名（从后续调用参数提取），防止迷失。
+    """
+    from agents.run_config import ModelInputData
+
+    model_data = data.model_data
+    items = list(model_data.input)
+
+    last_output_idx = max(
+        (i for i, it in enumerate(items)
+         if isinstance(it, dict) and it.get("type") == "function_call_output"),
+        default=-1,
+    )
+    # call_id → 工具名；并收集模型已选定的法规名
+    call_names = {}
+    used_docs = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if it.get("type") == "function_call":
+            if it.get("call_id"):
+                call_names[str(it["call_id"])] = it.get("name") or ""
+            try:
+                args = json.loads(it.get("arguments") or "{}")
+            except (TypeError, ValueError):
+                args = {}
+            doc_name = args.get("doc_name")
+            if doc_name and doc_name not in used_docs:
+                used_docs.append(doc_name)
+
+    trimmed = 0
+    for i, it in enumerate(items):
+        if i >= last_output_idx or not isinstance(it, dict):
+            continue
+        if it.get("type") != "function_call_output":
+            continue
+        name = call_names.get(str(it.get("call_id") or ""), "")
+        out = it.get("output", "")
+        if not (isinstance(out, str) and len(out) > 400):
+            continue
+        if name == "browse_documents":
+            # 多召回下模型需要知道"自己已经选了哪几本"——动态列全已选清单
+            # 并明确禁止再 browse（行为约束），防止模型因看不到清单而反复浏览。
+            doc_note = "、".join(used_docs) or "（尚未选定）"
+            browse_times = sum(
+                1 for it2 in items
+                if isinstance(it2, dict) and it2.get("type") == "function_call"
+                and it2.get("name") == "browse_documents"
+            )
+            items[i] = {
+                **it,
+                "output": f"[browse 结果已省略：法规库共 46 本法规。你已选定并正在"
+                          f"查询：{doc_note}——这就是本任务需要的全部法规（共 "
+                          f"{len(used_docs)} 本）。清单无需再看，禁止再调用 "
+                          f"browse_documents，直接对上述法规执行 get_document_structure"
+                          f" / get_page_content 检索。",
+            }
+            trimmed += 1
+            # 重复 browse 行为矫正：第 2 次及以上时追加训斥。
+            if browse_times >= 2:
+                items[i]["output"] += (
+                    f"\n[警告] 你已调用 browse_documents {browse_times} 次。"
+                    "法规清单你已看过，已选法规见上——再调用 browse_documents "
+                    "是错误的，立即改为对已选法规下钻。")
+    if trimmed:
+        print(f"[上下文瘦身] 本轮已省略 {trimmed} 个 browse 结果")
+
+    # 硬收敛：工具调用总次数达到上限时，注入强制停止检索的指令
+    # （max_turns 计模型轮次、每轮可并行多调用，压不住总步数——在这里封顶）
+    TOOL_CALL_BUDGET = 12
+    tool_calls_used = sum(
+        1 for it in items
+        if isinstance(it, dict) and it.get("type") == "function_call_output"
+    )
+
+    instructions = model_data.instructions
+    if tool_calls_used >= TOOL_CALL_BUDGET:
+        instructions = (instructions or "") + (
+            f"\n\n【强制收敛】工具调用次数已达上限（{tool_calls_used}/{TOOL_CALL_BUDGET}）。"
+            "现在必须停止检索，立即基于已检索到的内容输出最终回答，"
+            "不得再调用任何工具；未覆盖到的内容明确说明即可。"
+        )
+    return ModelInputData(input=items, instructions=instructions)
+
+
 def _run_kwargs(max_turns) -> dict:
     # No traces — the caller opted into QA, not telemetry.
     from agents import RunConfig
-    kwargs: dict = {"run_config": RunConfig(tracing_disabled=True)}
+    kwargs: dict = {"run_config": RunConfig(
+        tracing_disabled=True,
+        call_model_input_filter=_agentic_context_filter,
+    )}
     if max_turns is not None:
         kwargs["max_turns"] = max_turns
     return kwargs
