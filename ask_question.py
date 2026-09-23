@@ -2,7 +2,7 @@
 
 ask_question() 是生成器，逐步产出事件 dict：
   {"type": "step",  "text": "查阅《GB50016》3.6.4 页"}   检索过程
-  {"type": "delta", "text": "..."}                        答案文本增量
+  {"type": "paragraph", "id": "p1", "text": "..."}       完整段落增量
   {"type": "done",  "answer": ..., "cached": ..., "tokens": ..., "elapsed": ...}
   {"type": "error", "detail": "..."}
 导航结束时照旧写入检索缓存与会话历史（含 cached/tokens/elapsed 统计）。
@@ -58,7 +58,77 @@ _INSTRUCTION_ZH = (
     "只是过往查询留下的片段，往往不完整，也可能与当前问题的适用范围不符。"
     "唯一例外：与法规检索完全无关的纯对话（打招呼、让你复述上一句话等）"
     "可以直接回应。"
+    "输出协议（硬性要求）：最终答案必须使用 NDJSON（每行一个完整 JSON "
+    "对象）输出，不要输出 Markdown 代码块、JSON 数组或包裹对象。每个显示"
+    "段落对应一行，格式严格为 "
+    '{"type":"paragraph","text":"段落内容","sources":'
+    '[{"doc_name":"调用 get_page_content 时的精确文档名","pages":"逻辑页号"}]}'
+    "。text 可使用 Markdown，但 JSON 字符串中的换行必须转义为 \\n。"
+    "每段 sources 只列出实际支撑该段结论的原文页，且 doc_name/pages 必须"
+    "与已完成的 get_page_content 调用一致；纯对话段落使用 sources:[]。"
+    "text 中不要添加段落序号，序号由服务端按顺序生成。"
+    "即使只有一段也必须遵循此协议。"
 )
+
+
+class _ParagraphStreamParser:
+    """将模型的 NDJSON token 流转为完整段落。"""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.decoder = json.JSONDecoder()
+
+    @staticmethod
+    def _paragraph(value: object) -> dict | None:
+        if not isinstance(value, dict) or not isinstance(value.get("text"), str):
+            return None
+        sources = []
+        for source in value.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            doc_name, pages = source.get("doc_name"), source.get("pages")
+            if isinstance(doc_name, str) and doc_name.strip() and pages is not None:
+                sources.append({"doc_name": doc_name.strip(), "pages": str(pages).strip()})
+        return {"text": value["text"].strip(), "sources": sources}
+
+    def feed(self, chunk: str, final: bool = False) -> list[dict]:
+        self.buffer += chunk
+        results: list[dict] = []
+        while True:
+            self.buffer = self.buffer.lstrip()
+            if self.buffer.startswith("```"):
+                line_end = self.buffer.find("\n")
+                if line_end < 0:
+                    break
+                self.buffer = self.buffer[line_end + 1:]
+                continue
+            if not self.buffer:
+                break
+            if self.buffer[0] not in "[{":
+                starts = [pos for pos in (self.buffer.find("{"), self.buffer.find("["))
+                          if pos >= 0]
+                if not starts:
+                    break
+                self.buffer = self.buffer[min(starts):]
+            try:
+                value, end = self.decoder.raw_decode(self.buffer)
+            except json.JSONDecodeError:
+                # NDJSON 对象不会包含未转义换行；有换行说明这一行
+                # 已经完整但不合法，丢弃后继续寻找下一条。
+                if "\n" in self.buffer:
+                    self.buffer = self.buffer.split("\n", 1)[1]
+                    continue
+                break
+            self.buffer = self.buffer[end:]
+            for item in value if isinstance(value, list) else [value]:
+                paragraph = self._paragraph(item)
+                if paragraph and paragraph["text"]:
+                    results.append(paragraph)
+        if final and not results and self.buffer.strip().strip("`"):
+            # 供应商偶发不遵守 JSON 时仍能显示答案，但不伪造引用。
+            results.append({"text": self.buffer.strip().strip("`"), "sources": []})
+            self.buffer = ""
+        return results
 
 
 
@@ -120,6 +190,73 @@ def _references_from_items(items: list[dict]) -> list[dict]:
                 seen.add(key)
                 references.append({**r, "source": "leaf"})   # 下钻路过的叶子 → leaf 来源
     return merge_references(references)
+
+
+def _expand_page_numbers(value: str) -> set[int]:
+    """将模型返回的逻辑页范围展开；非法值直接忽略。"""
+    result: set[int] = set()
+    for part in str(value).split(","):
+        part = part.strip()
+        try:
+            if "-" in part:
+                start, end = (int(piece.strip()) for piece in part.split("-", 1))
+                if 0 < start <= end and end - start <= 100:
+                    result.update(range(start, end + 1))
+            elif part:
+                page = int(part)
+                if page > 0:
+                    result.add(page)
+        except ValueError:
+            continue
+    return result
+
+
+def _attach_paragraph_references(
+    paragraphs: list[dict], items: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """只把模型实际读过的页绑定到对应段落。
+
+    JSON 中的 sources 是显式关联；transcript 中的 get_page_content
+    是权威白名单。两者交集可防止模型生成一个未读取的页面引用。
+    """
+    retrieved: dict[str, set[int]] = {}
+    for item in items:
+        if not (isinstance(item, dict) and item.get("type") == "function_call"
+                and item.get("name") == "get_page_content"):
+            continue
+        try:
+            args = json.loads(item.get("arguments") or "{}")
+        except (TypeError, ValueError):
+            continue
+        doc_name = args.get("doc_name")
+        if isinstance(doc_name, str):
+            retrieved.setdefault(doc_name, set()).update(
+                _expand_page_numbers(str(args.get("pages") or "")))
+
+    all_references: list[dict] = []
+    seen: set[tuple] = set()
+    enriched: list[dict] = []
+    for index, paragraph in enumerate(paragraphs, 1):
+        paragraph_id = f"p{index}"
+        refs: list[dict] = []
+        for source in paragraph.get("sources") or []:
+            doc_name = source.get("doc_name") or ""
+            cited = _expand_page_numbers(source.get("pages") or "")
+            allowed = cited & retrieved.get(doc_name, set())
+            for page in sorted(allowed):
+                refs.extend({**ref, "source": "page", "paragraph_id": paragraph_id}
+                            for ref in resolve_refs(doc_name, str(page)))
+        refs = merge_references(refs)
+        enriched.append({"id": paragraph_id, "number": index,
+                         "text": paragraph["text"],
+                         "references": refs})
+        for ref in refs:
+            key = (ref.get("spec_no"), ref.get("clause_no"), ref.get("page_pdf"),
+                   paragraph_id)
+            if key not in seen:
+                seen.add(key)
+                all_references.append(ref)
+    return enriched, all_references
 
 
 _CITE_PAIR = re.compile(
@@ -224,12 +361,27 @@ def ask_question(
     # 命中：要点总结 + 引用成品直接回放（零模型调用、零重建）。
     if cached_entry and cached_entry[0]:
         answer, references = cached_entry[0], cached_entry[1] or []
+        texts = answer.split("\n\n") if answer else []
+        paragraphs = []
+        for index, text in enumerate(texts, 1):
+            paragraph_id = f"p{index}"
+            paragraphs.append({
+                "id": paragraph_id,
+                "number": index,
+                "text": text,
+                "references": [r for r in references
+                               if r.get("paragraph_id") == paragraph_id],
+            })
         elapsed = round(perf_counter() - started_at, 1)
+        structured = not references or any(r.get("paragraph_id") for r in references)
         history.append_turn(session_id, question, answer, cached=True, tokens=None,
-                            elapsed=elapsed, references=references)
-        yield {"type": "delta", "text": answer}
+                            elapsed=elapsed, references=references,
+                            answer_format="paragraphs-v1" if structured else None)
+        for paragraph in paragraphs:
+            yield {"type": "paragraph", **paragraph}
         yield {"type": "done", "answer": answer, "cached": True, "tokens": None,
-               "elapsed": elapsed, "references": references}
+               "elapsed": elapsed, "references": references,
+               "paragraphs": paragraphs if structured else None}
         return
 
     # 未命中：流式 agentic 导航。
@@ -243,6 +395,9 @@ def ask_question(
             stream=True,
         )
         final: Optional[dict] = None
+        parser = _ParagraphStreamParser()
+        raw_answer = ""
+        parsed_paragraphs: list[dict] = []
         for event in events:
             etype = event.get("type")
             if etype == "response.output_item.done":
@@ -252,12 +407,23 @@ def ask_question(
             elif etype == "response.output_text.delta":
                 delta = event.get("delta") or ""
                 if delta:
-                    yield {"type": "delta", "text": delta}
+                    raw_answer += delta
+                    for paragraph in parser.feed(delta):
+                        parsed_paragraphs.append(paragraph)
+                        yield {"type": "paragraph",
+                               "id": f"p{len(parsed_paragraphs)}",
+                               "number": len(parsed_paragraphs),
+                               "text": paragraph["text"]}
             elif etype in ("response.completed", "response.incomplete",
                            "response.failed"):
                 final = event.get("response") or {}
         if final is None:
             raise RuntimeError("模型未返回结果")
+        for paragraph in parser.feed("", final=True):
+            parsed_paragraphs.append(paragraph)
+            yield {"type": "paragraph", "id": f"p{len(parsed_paragraphs)}",
+                   "number": len(parsed_paragraphs),
+                   "text": paragraph["text"]}
     except Exception as exc:
         yield {"type": "error", "detail": str(exc)}
         return
@@ -270,19 +436,20 @@ def ask_question(
     tokens = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
     elapsed = round(perf_counter() - started_at, 1)
 
-    answer = ""
-    if output:
+    if not parsed_paragraphs and output:
         last = output[-1]
-        answer = "".join(
+        raw_answer = "".join(
             part.get("text", "") for part in (last.get("content") or [])
             if isinstance(part, dict)
         )
-    # 结构化引用：从 transcript 提取（page_content 页 + structure 条文叶），去重合并。
-    # 保留全部实读条文：段落标注负责命中筛选，底部列表兜底展示，依据不丢失。
-    references = _references_from_items(items)
+        parsed_paragraphs.extend(_ParagraphStreamParser().feed(raw_answer, final=True))
+
+    # 段落 JSON 提供关联，工具 transcript 提供可信页面白名单。
+    paragraphs, references = _attach_paragraph_references(parsed_paragraphs, items)
+    answer = "\n\n".join(paragraph["text"] for paragraph in paragraphs)
     history.append_turn(session_id, question, answer,
                         cached=False, tokens=tokens or None, elapsed=elapsed,
-                        references=references)
+                        references=references, answer_format="paragraphs-v1")
 
     # 只有完整问题的全库检索结果才写入全局缓存（要点总结 + 引用成品）。
     if doc_ids is None and complete_question:
@@ -290,7 +457,8 @@ def ask_question(
                   references_json=json.dumps(references, ensure_ascii=False))
 
     yield {"type": "done", "answer": answer, "cached": False,
-           "tokens": tokens or None, "elapsed": elapsed, "references": references}
+           "tokens": tokens or None, "elapsed": elapsed, "references": references,
+           "paragraphs": paragraphs}
 
 
 def main() -> None:
@@ -311,8 +479,8 @@ def main() -> None:
     ):
         if event["type"] == "step":
             print(f"[检索] {event['text']}")
-        elif event["type"] == "delta":
-            print(event["text"], end="", flush=True)
+        elif event["type"] == "paragraph":
+            print(f"{event['number']}. {event['text']}", flush=True)
         elif event["type"] == "done":
             print()
         elif event["type"] == "error":

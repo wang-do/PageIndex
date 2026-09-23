@@ -43,7 +43,7 @@ class ConversationHistory:
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT role, content, cached, tokens, elapsed, "references"
+                SELECT role, content, cached, tokens, elapsed, "references", answer_format
                 FROM conversation_messages
                 WHERE session_id = ?
                 ORDER BY id
@@ -53,6 +53,8 @@ class ConversationHistory:
         result = []
         for row in rows:
             item = dict(row)
+            if item.get("answer_format") is None:
+                item.pop("answer_format")
             if item.get("references"):
                 try:
                     item["references"] = json.loads(item["references"])
@@ -148,6 +150,7 @@ class ConversationHistory:
         tokens: int | None = None,
         elapsed: float | None = None,
         references: list | None = None,
+        answer_format: str | None = None,
     ) -> None:
         """保存一轮用户问题和 AI 回答（assistant 行附带缓存/token/耗时/引用）。"""
         references_json = (
@@ -172,14 +175,14 @@ class ConversationHistory:
             connection.executemany(
                 """
                 INSERT INTO conversation_messages(
-                    session_id, role, content, cached, tokens, elapsed, "references"
+                    session_id, role, content, cached, tokens, elapsed, "references", answer_format
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    (session_id, "user", question, None, None, None, None),
+                    (session_id, "user", question, None, None, None, None, None),
                     (session_id, "assistant", answer, cached, tokens, elapsed,
-                     references_json),
+                     references_json, answer_format),
                 ],
             )
 
@@ -205,10 +208,16 @@ class ConversationHistory:
                     cached INTEGER,
                     tokens INTEGER,
                     elapsed REAL,
-                    "references" TEXT
+                    "references" TEXT,
+                    answer_format TEXT
                 )
                 """
             )
+            columns = {row["name"] for row in connection.execute(
+                "PRAGMA table_info(conversation_messages)")}
+            if "answer_format" not in columns:
+                connection.execute(
+                    "ALTER TABLE conversation_messages ADD COLUMN answer_format TEXT")
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_conversation_messages_session

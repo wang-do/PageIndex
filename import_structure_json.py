@@ -12,8 +12,9 @@ from pageindex import PageIndexLocalClient
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
-## 可以把需要读的法规全部放在这
-DEFAULT_JSON_PATHS = "C:\\Users\\localuser\\Desktop\\王栋焱\\法律RAG\\json后处理\\pageindex_json"
+# 可以把需要读取的法规全部放在这里。使用 Path 拼接，避免 Windows
+# 路径中的 ``\U`` 被 Python 解释成 Unicode 转义。
+DEFAULT_JSON_PATHS = PROJECT_DIR.parent / "json后处理" / "pageindex_json_fixed"
 
 # 原始 tree JSON（含 position：PDF 页码/印刷页码/页内 bbox）所在目录。
 # 导入时归档为 .pageindex/docs/{doc_id}/raw_tree.json，供引用定位使用。
@@ -53,7 +54,7 @@ def archive_raw_tree(json_path: Path, doc_id: str, storage_path: Path) -> bool:
 def import_structure_json(json_paths: Path, storage_path: Path) -> list[dict]:
     """导入多份法规 JSON；同名文档已存在时跳过。"""
 
-    if json_paths == "":
+    if not json_paths.is_dir():
         raise NotADirectoryError(f"JSON 目录不存在：{json_paths}")
 
     client = create_client(storage_path)
@@ -62,7 +63,7 @@ def import_structure_json(json_paths: Path, storage_path: Path) -> list[dict]:
     }
     results: list[dict] = []
 
-    json_list = list(Path(json_paths).glob('*.json'))
+    json_list = list(json_paths.glob("*.json"))
 
     for json_path in json_list:
 
@@ -83,10 +84,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="导入 PageIndex 结构 JSON")
     parser.add_argument(
         "json_paths",
-        nargs="*",
+        nargs="?",
         type=Path,
         default=DEFAULT_JSON_PATHS,
-        help="一份或多份包含 structure 和 pages 的 JSON；不传时导入两份演示法规",
+        help="包含 structure 和 pages 的 JSON 目录；默认读取项目同级的 json后处理/pageindex_json",
     )
     parser.add_argument(
         "--storage-path",

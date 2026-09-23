@@ -34,6 +34,9 @@
     .assistant p { margin: 0 0 10px; }
     .assistant p:last-child { margin-bottom: 0; }
     .assistant ul, .assistant ol { margin: 0 0 10px; padding-left: 22px; }
+    .assistant .answer-paragraphs { margin: 0; padding-left: 26px; }
+    .assistant .answer-paragraphs > li { margin-bottom: 14px; padding-left: 3px; }
+    .assistant .answer-paragraphs > li:last-child { margin-bottom: 0; }
     .assistant h1, .assistant h2, .assistant h3 { margin: 14px 0 8px; font-size: 15px; }
     .assistant table { border-collapse: collapse; margin: 0 0 10px; }
     .assistant th, .assistant td { border: 1px solid #e0e0e0; padding: 5px 10px; }
@@ -336,6 +339,37 @@
       node.appendChild(box);
     }
 
+    // JSON 回答中引用已经与段落显式绑定，不再从文本猜测归属。
+    function appendParagraphReferences(node, references) {
+      if (!Array.isArray(references) || !references.length) return;
+      const span = document.createElement('span');
+      span.className = 'para-cites';
+      references.forEach((ref, index) => {
+        const a = document.createElement('a');
+        a.className = 'cite-chip';
+        a.textContent = (index === 0 ? '▸依据 ' : '') + `${ref.spec_no || ''} ${ref.clause_no || ''}`;
+        a.addEventListener('click', () => showReference(ref));
+        span.appendChild(a);
+      });
+      node.appendChild(span);
+    }
+
+    function renderStructuredParagraphs(container, paragraphs) {
+      container.replaceChildren();
+      if (!Array.isArray(paragraphs) || !paragraphs.length) return;
+      const list = document.createElement('ol');
+      list.className = 'answer-paragraphs';
+      paragraphs.forEach(paragraph => {
+        const block = document.createElement('li');
+        block.className = 'answer-paragraph';
+        block.dataset.paragraphId = paragraph.id || '';
+        block.innerHTML = renderMarkdown(paragraph.text || '');
+        appendParagraphReferences(block, paragraph.references);
+        list.appendChild(block);
+      });
+      container.appendChild(list);
+    }
+
     // ── 段落级依据标注：扫描每段中的"规范号 + 条款号"，匹配引用后在
     //    段落末尾追加可点击的依据标签。
     function normSpec(s) { return (s || '').replace(/[\s（）()]/g, ''); }
@@ -417,13 +451,31 @@
       const node = document.createElement('div');
       node.className = `message ${role}`;
       if (role === 'assistant' && window.marked) {
-        node.innerHTML = renderMarkdown(text);
+        const structured = meta && (meta.answer_format === 'paragraphs-v1'
+          || (Array.isArray(meta.references)
+            && meta.references.some(ref => ref.paragraph_id)));
+        if (structured) {
+          const paragraphs = text.split(/\n\s*\n/).map((value, index) => ({
+            id: `p${index + 1}`,
+            number: index + 1,
+            text: value,
+            references: meta.references.filter(ref => ref.paragraph_id === `p${index + 1}`)
+          }));
+          renderStructuredParagraphs(node, paragraphs);
+        } else {
+          node.innerHTML = renderMarkdown(text);
+        }
       } else {
         node.textContent = text;
       }
       if (meta) {
-        const citedKeys = annotateParagraphs(node, meta.references);
-        appendRefButtons(node, meta.references, citedKeys);
+        const structured = meta.answer_format === 'paragraphs-v1'
+          || (Array.isArray(meta.references)
+            && meta.references.some(ref => ref.paragraph_id));
+        if (!structured) {
+          const citedKeys = annotateParagraphs(node, meta.references);
+          appendRefButtons(node, meta.references, citedKeys);
+        }
         const parts = [meta.cached ? '命中缓存' : '未命中缓存'];
         if (meta.tokens != null) parts.push(`token：${meta.tokens}`);
         parts.push(`${meta.elapsed}s`);
@@ -504,7 +556,7 @@
       for (const message of history) {
         const meta = message.role === 'assistant' && message.elapsed != null
           ? { cached: !!message.cached, tokens: message.tokens, elapsed: message.elapsed,
-              references: message.references }
+              references: message.references, answer_format: message.answer_format }
           : undefined;
         addMessage(message.role, message.content, meta);
       }
@@ -711,6 +763,7 @@
         const decoder = new TextDecoder();
         let buffer = '';
         let answerText = '';
+        const streamedParagraphs = [];
         let finalMeta = null;
         while (true) {
           const { done, value } = await reader.read();
@@ -728,15 +781,26 @@
               li.textContent = event.text;
               stepList.appendChild(li);
               node.scrollIntoView({ block: 'end' });
+            } else if (event.type === 'paragraph') {
+              streamedParagraphs.push({ id: event.id, number: event.number,
+                text: event.text, references: [] });
+              renderStructuredParagraphs(body, streamedParagraphs);
+              answerText = streamedParagraphs.map(item => item.text).join('\n\n');
+              node.scrollIntoView({ block: 'end' });
             } else if (event.type === 'delta') {
+              // 兼容未升级的后端流。
               answerText += event.text ?? '';
               body.innerHTML = renderMarkdown(answerText);
               node.scrollIntoView({ block: 'end' });
             } else if (event.type === 'done') {
               answerText = event.answer;
-              body.innerHTML = renderMarkdown(answerText);
-              const citedKeys = annotateParagraphs(body, event.references);
-              appendRefButtons(body, event.references, citedKeys);
+              if (Array.isArray(event.paragraphs)) {
+                renderStructuredParagraphs(body, event.paragraphs);
+              } else {
+                body.innerHTML = renderMarkdown(answerText);
+                const citedKeys = annotateParagraphs(body, event.references);
+                appendRefButtons(body, event.references, citedKeys);
+              }
               finalMeta = event;
             } else if (event.type === 'error') {
               throw new Error(friendlyError(event.detail));
