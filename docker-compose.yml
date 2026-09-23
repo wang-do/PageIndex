@@ -1,0 +1,12 @@
+services:
+  pageindex:
+    image: pageindex:latest
+    build: .
+    container_name: pageindex
+    ports:
+      - "8000:8000"
+    # 数据已打包进镜像（pdf/.env/.pageindex），无需挂载。
+    # 如需数据外置（升级镜像不丢缓存/历史），取消下面注释：
+    # volumes:
+    #   - ./.pageindex:/app/.pageindex
+    restart: unless-stopped

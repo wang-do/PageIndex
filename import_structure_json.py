@@ -13,7 +13,7 @@ from pageindex import PageIndexLocalClient
 PROJECT_DIR = Path(__file__).resolve().parent
 
 ## 可以把需要读的法规全部放在这
-DEFAULT_JSON_PATHS = "C:\\Users\\localuser\\Desktop\\王栋焱\\法律RAG\\json后处理\\pageindex_json"
+DEFAULT_JSON_PATHS = "C:\\Users\\localuser\\Desktop\\王栋焱\\法律RAG\\json后处理\\pageindex_json_fixed"
 
 # 原始 tree JSON（含 position：PDF 页码/印刷页码/页内 bbox）所在目录。
 # 导入时归档为 .pageindex/docs/{doc_id}/raw_tree.json，供引用定位使用。
