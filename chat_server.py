@@ -177,6 +177,7 @@ def knowledge_base_list() -> Response:
                 "description": doc.get("description") or "",
                 "spec_no": str(meta.get("spec_no", "")).replace(" ", ""),
                 "spec_name": meta.get("spec_name") or "",
+                "spec_type": meta.get("spec_type") or "",
                 "status": meta.get("status") or "",
                 "implement_date": meta.get("implement_date") or "",
                 "page_count": page_count,

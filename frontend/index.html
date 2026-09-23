@@ -133,7 +133,23 @@
     .kb-card { display: flex; align-items: flex-start; gap: 10px; }
     .kb-card input[type="checkbox"] { margin-top: 3px; cursor: pointer; }
     .kb-card-body { flex: 1; }
+    .seg-block { margin-bottom: 10px; }
     .kb-status { padding: 30px; text-align: center; color: #888; }
+    .kb-cate-btn { padding: 6px 12px; font-size: 13px; background: #fff; border: 1px solid #d9d9d9; border-radius: 8px; cursor: pointer; }
+    .kb-cate-btn:hover { border-color: #1a66cc; color: #1a66cc; }
+    .kb-cate-modal { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 60; display: flex; align-items: center; justify-content: center; }
+    .kb-cate-modal[hidden] { display: none; }
+    .kb-cate-card { width: 560px; max-width: 92%; max-height: 80vh; overflow-y: auto; background: #fff; border-radius: 14px; padding: 22px 24px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+    .kb-cate-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+    .kb-cate-group { margin-bottom: 16px; }
+    .kb-cate-group-name { font-size: 13px; color: #888; margin-bottom: 8px; }
+    .kb-cate-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+    .kb-cate-chip { padding: 6px 14px; border: 1px solid #d9d9d9; border-radius: 16px; font-size: 13px; cursor: pointer; user-select: none; background: #fff; }
+    .kb-cate-chip.on { background: #1a66cc; border-color: #1a66cc; color: #fff; }
+    .kb-cate-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+    .kb-cate-actions button { padding: 7px 18px; border-radius: 8px; border: 1px solid #d9d9d9; background: #fff; cursor: pointer; }
+    .kb-cate-actions button.primary { background: #1a66cc; border-color: #1a66cc; color: #fff; }
+    .kb-cate-card { transition: border-color .2s; }
   </style>
 </head>
 <body>
@@ -197,8 +213,15 @@
         <input type="search" id="kb-search" placeholder="搜索规范名称或编号…">
         <span id="kb-selected-count" class="kb-selected-count"></span>
       </div>
+      <div class="kb-tools">
+        <button id="kb-categorize" type="button" class="kb-cate-btn">🗂 分类筛选</button>
+        <label class="kb-select-all"><input type="checkbox" id="kb-select-all" checked> 全选</label>
+        <input type="search" id="kb-search" placeholder="搜索规范名称或编号…">
+        <span id="kb-selected-count" class="kb-selected-count"></span>
+      </div>
       <div id="kb-list-body" class="kb-list-body"><div class="kb-status">加载中…</div></div>
     </div>
+
     <div id="kb-detail-view" class="kb-detail-view" hidden>
       <div class="kb-detail-toolbar">
         <button id="kb-back" type="button">&lt; 返回</button>
@@ -221,6 +244,16 @@
     </div>
   </div>
 
+  <div id="kb-cate-modal" class="kb-cate-modal" hidden>
+      <div class="kb-cate-card">
+        <div class="kb-cate-title">选择知识库分类（可多选）</div>
+        <div class="kb-cate-group"><div class="kb-cate-group-name">按专业</div><div id="kb-cate-major" class="kb-cate-chips"></div></div>
+        <div class="kb-cate-group"><div class="kb-cate-group-name">按标准层级</div><div id="kb-cate-level" class="kb-cate-chips"></div></div>
+        <div class="kb-cate-actions">
+          <button id="kb-cate-all" type="button">全选</button><button id="kb-cate-clear" type="button">清空</button><button id="kb-cate-ok" type="button" class="primary">完成</button>
+        </div>
+      </div>
+    </div>
   <script src="marked.min.js"></script>
   <script>
     let sessionId = null;
@@ -321,9 +354,11 @@
       // ① 段落标注已出现的 → 不重复（段落里已有胶囊）
       // ② leaf（下钻路过的叶子）且未命中 → 不显示（纯检索路径）
       // ③ page（读过原文的页）且未命中 → 底部补充显示
+      const hasKey = citedKeys && typeof citedKeys.has === 'function'
+        ? k => citedKeys.has(k) : () => false;   // 防御：citedKeys 必须是 Set
       const rest = references.filter(ref => {
         const key = (ref.spec_no || '') + (ref.clause_no || '');
-        if (citedKeys && citedKeys.has(key)) return false;
+        if (hasKey(key)) return false;
         return (ref.source || 'page') === 'page';
       });
       if (!rest.length) return;
@@ -445,44 +480,52 @@
       return citedKeys;
     }
 
+    function appendMetaLine(node, meta) {
+      const parts = [meta.cached ? '命中缓存' : '未命中缓存'];
+      if (meta.tokens != null) parts.push(`token：${meta.tokens}`);
+      parts.push(`${meta.elapsed}s`);
+      const line = document.createElement('div');
+      line.className = 'meta';
+      line.textContent = parts.join('  ·  ');
+      node.appendChild(line);
+    }
+
     function addMessage(role, text, meta) {
       const empty = messages.querySelector('.empty');
       if (empty) empty.remove();
       const node = document.createElement('div');
       node.className = `message ${role}`;
-      if (role === 'assistant' && window.marked) {
-        const structured = meta && (meta.answer_format === 'paragraphs-v1'
-          || (Array.isArray(meta.references)
-            && meta.references.some(ref => ref.paragraph_id)));
-        if (structured) {
-          const paragraphs = text.split(/\n\s*\n/).map((value, index) => ({
-            id: `p${index + 1}`,
-            number: index + 1,
-            text: value,
-            references: meta.references.filter(ref => ref.paragraph_id === `p${index + 1}`)
-          }));
-          renderStructuredParagraphs(node, paragraphs);
+      try {
+        if (role !== 'assistant') {
+          node.textContent = text;
+        } else if (isJsonAnswer(text || '')) {
+          // 兼容合并前远端保存的 t/c JSON 答案。
+          renderJsonAnswer(node, text, meta ? meta.references : null);
         } else {
-          node.innerHTML = renderMarkdown(text);
+          const refs = Array.isArray(meta?.references) ? meta.references : [];
+          const structured = meta?.answer_format === 'paragraphs-v1'
+            || refs.some(ref => ref.paragraph_id);
+          if (structured) {
+            const paragraphs = (text || '').split(/\n\s*\n/).map((value, index) => ({
+              id: `p${index + 1}`,
+              number: index + 1,
+              text: value,
+              references: refs.filter(ref => ref.paragraph_id === `p${index + 1}`)
+            }));
+            renderStructuredParagraphs(node, paragraphs);
+          } else {
+            node.innerHTML = renderMarkdown(text || '');
+            if (meta) {
+              const citedKeys = annotateParagraphs(node, refs);
+              appendRefButtons(node, refs, citedKeys);
+            }
+          }
         }
-      } else {
-        node.textContent = text;
-      }
-      if (meta) {
-        const structured = meta.answer_format === 'paragraphs-v1'
-          || (Array.isArray(meta.references)
-            && meta.references.some(ref => ref.paragraph_id));
-        if (!structured) {
-          const citedKeys = annotateParagraphs(node, meta.references);
-          appendRefButtons(node, meta.references, citedKeys);
-        }
-        const parts = [meta.cached ? '命中缓存' : '未命中缓存'];
-        if (meta.tokens != null) parts.push(`token：${meta.tokens}`);
-        parts.push(`${meta.elapsed}s`);
-        const line = document.createElement('div');
-        line.className = 'meta';
-        line.textContent = parts.join('  ·  ');
-        node.appendChild(line);
+        if (meta) appendMetaLine(node, meta);
+      } catch (err) {
+        console.error('[addMessage渲染异常]', err);
+        node.innerHTML = '';
+        node.textContent = text || '';   // 保底：任何异常都显示原始文本，消息不消失
       }
       messages.appendChild(node);
       node.scrollIntoView({ block: 'end' });
@@ -755,6 +798,8 @@
         steps.innerHTML = '<summary>检索过程</summary><ol></ol>';
         const stepList = steps.querySelector('ol');
         const body = document.createElement('div');
+        let jsonBuf = null;            // segments 解析状态（所有 delta 统一喂入）
+        let streamJsonRendered = 0;
         node.append(steps, body);
         messages.appendChild(node);
         node.scrollIntoView({ block: 'end' });
@@ -790,14 +835,25 @@
             } else if (event.type === 'delta') {
               // 兼容未升级的后端流。
               answerText += event.text ?? '';
-              body.innerHTML = renderMarkdown(answerText);
+              if (!jsonBuf) jsonBuf = { s: '', depth: 0, inStr: false, esc: false, segs: [] };
+              const segs = feedJsonSegments(event.text ?? '', jsonBuf);
+              if (segs.length && streamJsonRendered === 0) body.replaceChildren();
+              segs.slice(streamJsonRendered).forEach(seg => {
+                seg._el = renderSegmentBlock(body, seg, null);
+              });
+              streamJsonRendered = segs.length;
+              if (!segs.length && !/^\s*\{/.test(answerText)) {
+                body.innerHTML = renderMarkdown(answerText);
+              }
               node.scrollIntoView({ block: 'end' });
             } else if (event.type === 'done') {
               answerText = event.answer;
               if (Array.isArray(event.paragraphs)) {
                 renderStructuredParagraphs(body, event.paragraphs);
+              } else if (isJsonAnswer(answerText || '')) {
+                renderJsonAnswer(body, answerText, event.references);
               } else {
-                body.innerHTML = renderMarkdown(answerText);
+                body.innerHTML = renderMarkdown(answerText || '');
                 const citedKeys = annotateParagraphs(body, event.references);
                 appendRefButtons(body, event.references, citedKeys);
               }
@@ -845,6 +901,91 @@
       question.focus();
     }
 
+    // ── JSON segments 流式解析与渲染（新格式：{"t":正文,"c":[条款号]}）
+    // 深度计数 + 字符串状态机；segment 完整即回调渲染（假流式）。
+    function isJsonAnswer(s) {
+      // 宽容检测：容忍英文间隙前缀，内容中出现 JSON 对象特征即可
+      return (s || '').includes('{"t":');
+    }
+    function feedJsonSegments(chunk, buf) {
+      for (const ch of chunk) {
+        buf.s += ch;
+        if (buf.inStr) {
+          if (buf.esc) buf.esc = false;
+          else if (ch === '\\') buf.esc = true;
+          else if (ch === '"') buf.inStr = false;
+          continue;
+        }
+        if (ch === '"') buf.inStr = true;
+        else if (ch === '{') {
+          if (buf.depth === 0) buf.s = ch;  // 新对象开始：丢弃之前的非 JSON 前缀（如英文间隙文本）
+          buf.depth++;
+        }
+        else if (ch === '}') {
+          buf.depth--;
+          if (buf.depth === 0) {
+            try {
+              const obj = JSON.parse(buf.s);
+              if (obj && typeof obj.t === 'string') buf.segs.push(obj);
+            } catch (err) { /* 非法对象丢弃 */ }
+            buf.s = '';
+          }
+        }
+      }
+      return buf.segs;
+    }
+    function matchCitation(cite, refs) {
+      if (!refs || !refs.length) return null;
+      const norm = String(cite || '').replace(/[\s（）()]/g, '');
+      return refs.find(r => {
+        const rn = String(r.spec_no || '').replace(/[\s（）()]/g, '');
+        if (!rn || !norm.startsWith(rn)) return false;
+        const clause = norm.slice(rn.length);
+        if (!clause) return false;
+        if (coversClause(r.clause_no || '', clause)) return true;
+        return String(r.clause_no || '').includes(clause);
+      }) || null;
+    }
+    function renderSegmentBlock(body, seg, refs) {
+      const div = document.createElement('div');
+      div.className = 'seg-block';
+      div.innerHTML = renderMarkdown(seg.t || '');
+      body.appendChild(div);
+      if (Array.isArray(seg.c) && seg.c.length) {
+        const span = document.createElement('span');
+        span.className = 'para-cites';
+        const label = document.createElement('span');
+        label.textContent = '▸依据 ';
+        span.appendChild(label);
+        let hits = 0;
+        seg.c.forEach(cite => {
+          const ref = matchCitation(cite, refs);
+          const chip = document.createElement('a');
+          chip.className = 'cite-chip';
+          chip.textContent = ref ? `${ref.spec_no || ''} ${ref.clause_no || ''}` : cite;
+          if (ref) { chip.addEventListener('click', () => showReference(ref)); hits++; }
+          else chip.style.opacity = '.55';
+          span.appendChild(chip);
+        });
+        if (hits) div.appendChild(span);
+      }
+      return div;
+    }
+    function renderJsonAnswer(body, raw, refs) {
+      try {
+        const buf = { s: '', depth: 0, inStr: false, esc: false, segs: [] };
+        feedJsonSegments(raw, buf);
+        body.innerHTML = '';
+        buf.segs.forEach(seg => renderSegmentBlock(body, seg, refs));
+        if (!buf.segs.length) body.innerHTML = renderMarkdown(raw);  // 容错：非 JSON 回退
+        return buf;
+      } catch (err) {
+        console.error('[JSON渲染失败]', err);
+        body.innerHTML = renderMarkdown(raw);  // 任何异常回退原文显示，回答不消失
+        return null;
+      }
+    }
+
     // ── 知识库浏览：入口 → 列表 → 详情（左信息右预览，覆盖式）。
     const kbView = document.querySelector('#kb-view');
     const kbDetailView = document.querySelector('#kb-detail-view');
@@ -855,6 +996,55 @@
     const kbDeselected = () => new Set(JSON.parse(localStorage.getItem(KB_DESELECTED_KEY) || '[]'));
     const kbSetDeselected = (set) => localStorage.setItem(KB_DESELECTED_KEY, JSON.stringify([...set]));
     const kbSearchKeyword = () => (document.querySelector('#kb-search').value || '').trim().toLowerCase();
+    // ── 分类体系：规范号 → 专业分类（多属）；层级由 spec_type 推断。
+    const KB_MAJOR = {
+      '建筑通用': ['GB55031-2022','GB50352-2019','GB50096-2011','GB50180-2018','GB50345-2012','GB55030-2022','GB55019-2021','GB50763-2012','GB55016-2021','GBT50378-2019','GB55015-2021'],
+      '办公': ['JGJT67-2019'],
+      '文教': ['JGJT41-2014','JGJ38-2015','JGJ66-2015','GB50099-2011','JGJ39-2016'],
+      '医疗': ['GB51039-2014','GB50333-2013'],
+      '商业': ['JGJ48-2014','JGJ62-2014','JGJ58-2008'],
+      '居住福利': ['JGJ36-2016','GB55025-2022','JGJ450-2018'],
+      '交通物流': ['GB51236-2017','GB51157-2016','JGJ100-2015'],
+      '体育': ['JGJ354-2014'],
+      '防火': ['GB55037-2022','GB50016-2014(2018)','GB55036-2022','GB50222-2017','GB50067-2014','GB51298-2018','GB50098-2009'],
+      '给水排水': ['GB55020-2021','GB50015-2019'],
+      '暖通空调': ['GB50736-2012','GB50019-2015','GB51251-2017'],
+      '电气': ['GB50052-2009','GB50053-2013','GBT50034-2024'],
+      '人防': ['GB50038-2005(2023)'],
+      '环境污染控制': ['GB50325-2020'],
+    };
+    const KB_LEVELS = ['强制性通用规范', '专门标准', '推荐性标准', '行业标准'];
+    function kbLevelOf(item) {
+      const no = item.spec_no || '', type = (item.spec_type || '').toUpperCase();
+      if (type.includes('JGJ')) return '行业标准';
+      if (no.includes('T') && no.startsWith('GB')) return '推荐性标准';
+      if (/GB55/.test(no)) return '强制性通用规范';
+      return '专门标准';
+    }
+    function kbMajorsOf(item) {
+      const no = item.spec_no || '';
+      const majors = [];
+      for (const [major, nos] of Object.entries(KB_MAJOR)) {
+        if (nos.some(n => no === n || no.startsWith(n.split('-')[0]))) majors.push(major);
+      }
+      return majors.length ? majors : ['建筑通用'];
+    }
+    // 用户已选分类（localStorage 持久；空 = 不按分类过滤）
+    const KB_CATE_KEY = 'kb_categories';
+    function showCateError(msg) {
+      const title = document.querySelector('.kb-cate-title');
+      const card = document.querySelector('.kb-cate-card');
+      title.textContent = msg;
+      title.style.color = '#d93025';
+      card.style.borderColor = '#d93025';
+      setTimeout(() => {
+        title.textContent = '选择知识库分类（可多选）';
+        title.style.color = '';
+        card.style.borderColor = '';
+      }, 2000);
+    }
+    const kbCates = () => new Set(JSON.parse(localStorage.getItem(KB_CATE_KEY) || '[]'));
+    const kbSetCates = (set) => localStorage.setItem(KB_CATE_KEY, JSON.stringify([...set]));
 
     document.querySelector('#kb-entry').addEventListener('click', openKnowledgeBase);
     document.querySelector('#kb-back').addEventListener('click', () => { kbDetailView.hidden = true; });
@@ -869,20 +1059,33 @@
         const items = await resp.json();
         if (!items.length) { kbListBody.innerHTML = '<div class="kb-status">知识库为空</div>'; return; }
         kbAllIds = items.map(item => item.doc_id);
+        const deselectedNow = kbDeselected();
+        // 排序：选中的排前面，未选中的排后面（组内按名称）
+        items.sort((a, b) => {
+          const aSel = !deselectedNow.has((a.spec_no || '') + a.doc_id);
+          const bSel = !deselectedNow.has((b.spec_no || '') + b.doc_id);
+          if (aSel !== bSel) return aSel ? -1 : 1;
+          return (a.name || '').localeCompare(b.name || '');
+        });
         kbListBody.innerHTML = '';
         items.forEach(item => {
+          item._majors = kbMajorsOf(item);
+          item._level = kbLevelOf(item);
           const card = document.createElement('div');
           card.className = 'kb-card';
           const box = document.createElement('input');
           box.type = 'checkbox';
-          box.checked = !kbDeselected().has(item.doc_id);
+          box.checked = !kbDeselected().has((item.spec_no || '') + item.doc_id);
           box.addEventListener('click', e => e.stopPropagation());
+          const specKey = (item.spec_no || '') + item.doc_id;
+          box.dataset.spec = specKey;
           box.addEventListener('change', () => {
             const deselected = kbDeselected();
-            if (box.checked) deselected.delete(item.doc_id);
-            else deselected.add(item.doc_id);
+            if (box.checked) deselected.delete(specKey);
+            else deselected.add(specKey);
             kbSetDeselected(deselected);
             updateKbSelectedCount();
+            resortKbList();
           });
           const bodyDiv = document.createElement('div');
           bodyDiv.className = 'kb-card-body';
@@ -898,6 +1101,9 @@
           bodyDiv.append(name, sub, meta);
           card.append(box, bodyDiv);
           card.dataset.searchable = ((item.name || '') + ' ' + (item.spec_name || '')).toLowerCase();
+          card.dataset.majors = item._majors.join('|');
+          card.dataset.level = item._level;
+          card.dataset.spec = (item.spec_no || '') + item.doc_id;
           card.addEventListener('click', () => openKbDetail(item));
           kbListBody.appendChild(card);
         });
@@ -916,16 +1122,40 @@
       }
     }
 
+    // 勾选变化后重排：选中的卡片移动到前面（组内保持原序）。
+    function resortKbList() {
+      const deselected = kbDeselected();
+      const cards = [...kbListBody.querySelectorAll('.kb-card')];
+      cards.sort((a, b) => {
+        const aSel = !deselected.has(a.dataset.spec || '');
+        const bSel = !deselected.has(b.dataset.spec || '');
+        if (aSel !== bSel) return aSel ? -1 : 1;
+        return 0;
+      });
+      cards.forEach(c => kbListBody.appendChild(c));
+    }
+
     function updateKbSelectedCount() {
       const el = document.querySelector('#kb-selected-count');
       if (el) el.textContent = `已选 ${kbAllIds.length - kbDeselected().size} / ${kbAllIds.length} 本`;
     }
 
     document.querySelector('#kb-select-all').addEventListener('change', e => {
+      // 全选只作用于分类过滤后【显示中】的卡片；隐藏（未选分类）的保持原状。
       const checked = e.target.checked;
-      document.querySelectorAll('#kb-list-body input[type=checkbox]').forEach(box => { box.checked = checked; });
-      kbSetDeselected(checked ? new Set() : new Set(kbAllIds));
+      const deselected = kbDeselected();
+      document.querySelectorAll('#kb-list-body .kb-card').forEach(card => {
+        if (card.style.display === 'none') return;
+        const box = card.querySelector('input[type=checkbox]');
+        if (!box) return;
+        box.checked = checked;
+        const key = box.dataset.spec || '';
+        if (checked) deselected.delete(key);
+        else deselected.add(key);
+      });
+      kbSetDeselected(deselected);
       updateKbSelectedCount();
+      resortKbList();
     });
     document.querySelector('#kb-search').addEventListener('input', e => {
       const kw = e.target.value.trim().toLowerCase();
@@ -941,6 +1171,85 @@
       const ids = kbAllIds.filter(id => !deselected.has(id));
       return ids.length ? ids : null;
     }
+
+    // 分类确定 → 勾选联动：选中分类的规范勾上，其余取消勾选。
+    function applyCategorySelection() {
+      const cates = kbCates();
+      if (!cates.size) return;
+      const deselected = kbDeselected();
+      document.querySelectorAll('#kb-list-body .kb-card').forEach(card => {
+        const box = card.querySelector('input[type=checkbox]');
+        if (!box) return;
+        const major = card.dataset.majors || '';
+        const level = card.dataset.level || '';
+        const inCate = major.split('|').some(x => cates.has(x)) || cates.has(level);
+        box.checked = inCate;
+        const key = (box.dataset.spec || '');
+        if (inCate) deselected.delete(key);
+        else deselected.add(key);
+      });
+      kbSetDeselected(deselected);
+      updateKbSelectedCount();
+      resortKbList();
+    }
+
+    function openCateModal() {
+      const modal = document.querySelector('#kb-cate-modal');
+      const majorBox = document.querySelector('#kb-cate-major');
+      const levelBox = document.querySelector('#kb-cate-level');
+      const saved = kbCates();
+      majorBox.innerHTML = '';
+      levelBox.innerHTML = '';
+      const toggleChip = chip => {
+        chip.classList.toggle('on');
+        const on = [...document.querySelectorAll('#kb-cate-modal .kb-cate-chip.on')];
+        kbSetCates(new Set(on.map(c => c.dataset.cate)));
+        applyCategorySelection();  // 点击即生效：勾选状态实时联动
+      };
+      Object.keys(KB_MAJOR).forEach(major => {
+        const chip = document.createElement('span');
+        chip.className = 'kb-cate-chip' + (saved.has(major) ? ' on' : '');
+        chip.textContent = major;
+        chip.dataset.cate = major;
+        chip.addEventListener('click', () => toggleChip(chip));
+        majorBox.appendChild(chip);
+      });
+      KB_LEVELS.forEach(level => {
+        const chip = document.createElement('span');
+        chip.className = 'kb-cate-chip' + (saved.has(level) ? ' on' : '');
+        chip.textContent = level;
+        chip.dataset.cate = level;
+        chip.addEventListener('click', () => toggleChip(chip));
+        levelBox.appendChild(chip);
+      });
+      modal.hidden = false;
+    }
+
+    document.querySelector('#kb-categorize').addEventListener('click', openCateModal);
+    document.querySelector('#kb-cate-ok').addEventListener('click', () => {
+      // 校验：列表已加载时至少勾选一本规范（0 勾选 = 检索无范围）
+      const boxes = [...document.querySelectorAll('#kb-list-body input[type=checkbox]')];
+      const listLoaded = boxes.length > 0;
+      if (listLoaded && !boxes.some(b => b.checked)) {
+        showCateError('应至少选择一项');
+        return;  // 阻止关闭
+      }
+      document.querySelector('#kb-cate-modal').hidden = true;  // 选择已实时生效，仅关闭弹窗
+    });
+    // 弹窗内全选：所有分类 chips 选中 → 全部规范勾选
+    document.querySelector('#kb-cate-all').addEventListener('click', () => {
+      document.querySelectorAll('#kb-cate-modal .kb-cate-chip').forEach(c => c.classList.add('on'));
+      kbSetCates(new Set([...document.querySelectorAll('#kb-cate-modal .kb-cate-chip')].map(c => c.dataset.cate)));
+      applyCategorySelection();  // 全部勾选
+    });
+    // 弹窗内清空：分类清空 → 恢复全部勾选（不按分类过滤）
+    document.querySelector('#kb-cate-clear').addEventListener('click', () => {
+      document.querySelectorAll('#kb-cate-modal .kb-cate-chip').forEach(c => c.classList.remove('on'));
+      kbSetCates(new Set());
+      localStorage.setItem(KB_DESELECTED_KEY, '[]');  // 清空取消勾选集合 = 全选
+      document.querySelectorAll('#kb-list-body input[type=checkbox]').forEach(box => { box.checked = true; });
+      updateKbSelectedCount();
+    });
 
     async function openKbDetail(item) {
       kbDetailView.hidden = false;
@@ -1001,6 +1310,9 @@
 
     initialize().catch((error) => addMessage('error', error.message));
 
+    // 页面加载完成 → 自动弹知识库分类选择
+    openCateModal();
+
     // 把后端报错翻译成用户能看懂的话（匹配不到就原样显示）。
     // 只认 "Insufficient Balance/余额不足" 文字特征（高度特异，不会误判）；
     // 402 状态码数字太弱（截断的无关报错可能带它），不作为判据。
@@ -1030,6 +1342,7 @@
       }
     }
   </script>
+
 
 </body>
 </html>

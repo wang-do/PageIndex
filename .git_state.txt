@@ -1,5 +1,0 @@
-d8e0f717d920231a0718558d71e6491f480e1dfa	refs/heads/master
-906ed58 修改不计算在内的文档
-6c48cc3 删除pdf文档，过�?
-## master
-

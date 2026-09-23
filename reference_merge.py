@@ -18,90 +18,17 @@ def _clause_sort_key(clause_no: str) -> tuple:
 
 
 def merge_references(references: list[dict]) -> list[dict]:
-    """合并同法规、同 PDF 页、条款号连续的引用（范围形态，如 6.8.1~6.8.5）。
+    """引用去重（单条形态）——JSON 模式下 c 引用精确到条，每条自带 bbox。
 
-    分组改为按键聚合（顺序无关）：双源提取后同页条文可能被其他法规的
-    引用隔开，必须按键归组而不是按"相邻"归组，否则同页条文会被拆开。"""
-    if len(references) < 2:
-        return references
-
-    groups: dict[tuple, list[dict]] = {}
-    group_order: list[tuple] = []
+    去重键：(法规, 条款号, 页号)。顺序保持首次出现。
+    单条 bbox 来自 raw_tree 的精确 position，PDF 跳转红框按条定位。
+    """
+    seen: set = set()
+    unique: list[dict] = []
     for ref in references:
-        key = (ref.get("spec_no"), ref.get("page_pdf"))
-        if key not in groups:
-            groups[key] = []
-            group_order.append(key)
-        groups[key].append(ref)
-
-    merged: list[dict] = []
-    for key in group_order:
-        items = groups[key]
-        ordered = sorted(items, key=lambda r: _clause_sort_key(r["clause_no"]))
-        # 组内按"前缀相同且尾号连续"切连续段。
-        segments: list[dict] = []
-        for item in ordered:
-            prefix, tail = _clause_sort_key(item["clause_no"])
-            prev = segments[-1] if segments else None
-            if (prev and prev["prefix"] == prefix and prev["tail"] is not None
-                    and tail == prev["tail"] + 1):
-                prev["items"].append(item)
-                prev["tail"] = tail
-            else:
-                segments.append({"prefix": prefix, "tail": tail, "items": [item]})
-
-        for segment in segments:
-            seg_items = segment["items"]
-            first, last = seg_items[0], seg_items[-1]
-            boxes = [it["bbox"] for it in seg_items if it.get("bbox")]
-            bbox = (
-                [min(b[0] for b in boxes), min(b[1] for b in boxes),
-                 max(b[2] for b in boxes), max(b[3] for b in boxes)]
-                if boxes and all(b for b in boxes) else first.get("bbox")
-            )
-            clause_no = (first["clause_no"] if first is last
-                         else f"{first['clause_no']}~{last['clause_no']}")
-            source = "page" if any(it.get("source") == "page" for it in seg_items) else "leaf"
-            merged.append({**first, "clause_no": clause_no, "bbox": bbox, "source": source})
-    return merged
-
-    # 按键聚合（顺序无关）：双源提取后同一页的条文可能被其他法规的
-    # 引用隔开，必须按键归组而不是按"相邻"归组，否则同页条文会被拆开。
-    groups: dict[tuple, list[dict]] = {}
-    group_order: list[tuple] = []
-    for ref in references:
-        key = (ref.get("spec_no"), ref.get("page_pdf"))
-        if key not in groups:
-            groups[key] = []
-            group_order.append(key)
-        groups[key].append(ref)
-
-    merged: list[dict] = []
-    for key in group_order:
-        items = groups[key]
-        ordered = sorted(items, key=lambda r: _clause_sort_key(r["clause_no"]))
-        # 组内按"前缀相同且尾号连续"切连续段。
-        segments: list[dict] = []
-        for item in ordered:
-            prefix, tail = _clause_sort_key(item["clause_no"])
-            prev = segments[-1] if segments else None
-            if (prev and prev["prefix"] == prefix and prev["tail"] is not None
-                    and tail == prev["tail"] + 1):
-                prev["items"].append(item)
-                prev["tail"] = tail
-            else:
-                segments.append({"prefix": prefix, "tail": tail, "items": [item]})
-
-        for segment in segments:
-            seg_items = segment["items"]
-            first, last = seg_items[0], seg_items[-1]
-            boxes = [it["bbox"] for it in seg_items if it.get("bbox")]
-            bbox = (
-                [min(b[0] for b in boxes), min(b[1] for b in boxes),
-                 max(b[2] for b in boxes), max(b[3] for b in boxes)]
-                if boxes and all(b for b in boxes) else first.get("bbox")
-            )
-            clause_no = (first["clause_no"] if first is last
-                         else f"{first['clause_no']}~{last['clause_no']}")
-            merged.append({**first, "clause_no": clause_no, "bbox": bbox})
-    return merged
+        key = (ref.get("spec_no"), ref.get("clause_no"), ref.get("page_pdf"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(ref)
+    return unique
