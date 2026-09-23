@@ -11,3 +11,4 @@ pdf/
 .push_err.txt
 *.rar
 *.tar
+/outputs
